@@ -85,14 +85,63 @@ Test upload functionality:
 uv run content-cli test --video path/to/your/video.mov --platform all
 ```
 
+### Configuration Management
+
+Show current configuration:
+```bash
+uv run content-cli config show
+```
+
+Set watch directory (where videos are monitored):
+```bash
+uv run content-cli config set-watch-dir /path/to/your/videos
+```
+
+Set processed directory (where completed videos are saved):
+```bash
+uv run content-cli config set-processed-dir /path/to/processed/videos
+```
+
+Set video file extensions to watch for:
+```bash
+uv run content-cli config set-extensions mov,mp4,avi,mkv
+```
+
+Enable/disable upload to specific platforms:
+```bash
+uv run content-cli config toggle-platform instagram enable
+uv run content-cli config toggle-platform tiktok disable
+```
+
+Validate configuration:
+```bash
+uv run content-cli config validate
+```
+
+Reset to defaults:
+```bash
+uv run content-cli config reset
+```
+
 ### Configuration
 
-You can control which platforms to upload to by setting environment variables in your `.env` file:
-```bash
-UPLOAD_TO_INSTAGRAM=true
-UPLOAD_TO_YOUTUBE=true
-UPLOAD_TO_TIKTOK=false
-```
+The tool now supports flexible configuration through the CLI. You can:
+
+1. **Use CLI commands** (recommended):
+   ```bash
+   uv run content-cli config set-watch-dir ~/Videos
+   uv run content-cli config set-processed-dir ~/Videos/Processed
+   uv run content-cli config toggle-platform instagram enable
+   ```
+
+2. **Use environment variables** (legacy):
+   ```bash
+   UPLOAD_TO_INSTAGRAM=true
+   UPLOAD_TO_YOUTUBE=true
+   UPLOAD_TO_TIKTOK=false
+   ```
+
+Configuration is stored in `~/.content_creation/config.json` and takes precedence over environment variables.
 
 ## Project Structure
 

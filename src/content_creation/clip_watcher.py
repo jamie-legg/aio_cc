@@ -10,14 +10,14 @@ from dotenv import load_dotenv
 
 from .oauth_manager import OAuthManager
 from .upload_manager import UploadManager
+from .config_manager import ConfigManager
 
 # Load environment variables
 load_dotenv()
 
-# ---- CONFIG ----
-WATCH_DIR = Path.home() / "Movies"
-PROCESSED_DIR = WATCH_DIR / "Processed"
-PROCESSED_DIR.mkdir(exist_ok=True)
+# Initialize configuration manager
+config_manager = ConfigManager()
+config = config_manager.get_config()
 
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -60,13 +60,18 @@ def process_clip(path):
     ai_meta = generate_ai_caption(path.name)
     print(f"AI generated: {ai_meta.get('title')}")
 
+    # Get current config
+    current_config = config_manager.get_config()
+    processed_dir = Path(current_config.processed_dir)
+    processed_dir.mkdir(exist_ok=True)
+
     # Save JSON metadata
-    out_json = PROCESSED_DIR / f"{path.stem}.json"
+    out_json = processed_dir / f"{path.stem}.json"
     with open(out_json, "w") as f:
         json.dump(ai_meta, f, indent=2)
 
     # Move video to processed folder
-    new_path = PROCESSED_DIR / path.name
+    new_path = processed_dir / path.name
     path.rename(new_path)
     print(f"[✓] Saved metadata: {out_json}\n[→] Moved clip: {new_path}")
     
@@ -75,14 +80,11 @@ def process_clip(path):
 
 def upload_to_social_media(video_path, metadata):
     """Upload video to configured social media platforms."""
+    # Get current config
+    current_config = config_manager.get_config()
+    
     # Check which platforms to upload to
-    platforms = []
-    if os.getenv("UPLOAD_TO_INSTAGRAM", "true").lower() == "true":
-        platforms.append("instagram")
-    if os.getenv("UPLOAD_TO_YOUTUBE", "true").lower() == "true":
-        platforms.append("youtube")
-    if os.getenv("UPLOAD_TO_TIKTOK", "true").lower() == "true":
-        platforms.append("tiktok")
+    platforms = config_manager.get_upload_platforms()
     
     if not platforms:
         print("No platforms configured for upload")
@@ -112,13 +114,28 @@ def upload_to_social_media(video_path, metadata):
             print(f"  ❌ {platform.upper()}: {result.error}")
 
 def watch_folder():
-    seen = set(os.listdir(WATCH_DIR))
-    print(f"Watching {WATCH_DIR} for new .mov files...")
+    # Get current config
+    current_config = config_manager.get_config()
+    watch_dir = Path(current_config.watch_dir)
+    
+    if not watch_dir.exists():
+        print(f"Error: Watch directory {watch_dir} does not exist")
+        print("Use 'uv run content-cli config set-watch-dir <path>' to set a valid directory")
+        return
+    
+    seen = set(os.listdir(watch_dir))
+    extensions_str = ", ".join(current_config.video_extensions)
+    print(f"Watching {watch_dir} for new {extensions_str} files...")
+    
     while True:
-        current = set(os.listdir(WATCH_DIR))
-        new_files = [f for f in current - seen if f.endswith(".mov")]
+        current = set(os.listdir(watch_dir))
+        new_files = []
+        for f in current - seen:
+            if any(f.lower().endswith(ext) for ext in current_config.video_extensions):
+                new_files.append(f)
+        
         for f in new_files:
-            process_clip(WATCH_DIR / f)
+            process_clip(watch_dir / f)
         seen = current
         time.sleep(3)
 

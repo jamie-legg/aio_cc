@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from .oauth_manager import OAuthManager
 from .upload_manager import UploadManager
+from .config_manager import ConfigManager
 
 def setup_auth(args):
     """Set up authentication for social media platforms."""
@@ -92,6 +93,51 @@ def test_upload(args):
         else:
             print(f"❌ {platform.upper()}: {result.error}")
 
+def config_show(args):
+    """Show current configuration."""
+    config_manager = ConfigManager()
+    config_manager.show_config()
+
+def config_set_watch_dir(args):
+    """Set the watch directory for video files."""
+    config_manager = ConfigManager()
+    success = config_manager.set_watch_dir(args.path)
+    if success:
+        config_manager.validate_config()
+
+def config_set_processed_dir(args):
+    """Set the processed directory for completed videos."""
+    config_manager = ConfigManager()
+    success = config_manager.set_processed_dir(args.path)
+    if success:
+        config_manager.validate_config()
+
+def config_set_extensions(args):
+    """Set video file extensions to watch for."""
+    config_manager = ConfigManager()
+    extensions = args.extensions.split(',')
+    success = config_manager.set_video_extensions(extensions)
+    if success:
+        config_manager.validate_config()
+
+def config_toggle_platform(args):
+    """Enable or disable upload to a specific platform."""
+    config_manager = ConfigManager()
+    enabled = args.action == "enable"
+    success = config_manager.set_upload_platform(args.platform, enabled)
+    if success:
+        config_manager.show_config()
+
+def config_reset(args):
+    """Reset configuration to defaults."""
+    config_manager = ConfigManager()
+    config_manager.reset_to_defaults()
+
+def config_validate(args):
+    """Validate current configuration."""
+    config_manager = ConfigManager()
+    config_manager.validate_config()
+
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(description="Content Creation CLI")
@@ -116,10 +162,54 @@ def main():
                            default="all", help="Platform to test upload to")
     test_parser.set_defaults(func=test_upload)
     
+    # Configuration commands
+    config_parser = subparsers.add_parser("config", help="Configuration management")
+    config_subparsers = config_parser.add_subparsers(dest="config_command", help="Configuration commands")
+    
+    # Show config
+    config_show_parser = config_subparsers.add_parser("show", help="Show current configuration")
+    config_show_parser.set_defaults(func=config_show)
+    
+    # Set watch directory
+    config_watch_parser = config_subparsers.add_parser("set-watch-dir", help="Set watch directory for video files")
+    config_watch_parser.add_argument("path", help="Path to watch directory")
+    config_watch_parser.set_defaults(func=config_set_watch_dir)
+    
+    # Set processed directory
+    config_processed_parser = config_subparsers.add_parser("set-processed-dir", help="Set processed directory for completed videos")
+    config_processed_parser.add_argument("path", help="Path to processed directory")
+    config_processed_parser.set_defaults(func=config_set_processed_dir)
+    
+    # Set video extensions
+    config_ext_parser = config_subparsers.add_parser("set-extensions", help="Set video file extensions to watch for")
+    config_ext_parser.add_argument("extensions", help="Comma-separated list of extensions (e.g., mov,mp4,avi)")
+    config_ext_parser.set_defaults(func=config_set_extensions)
+    
+    # Toggle platform
+    config_platform_parser = config_subparsers.add_parser("toggle-platform", help="Enable or disable upload to a platform")
+    config_platform_parser.add_argument("platform", choices=["instagram", "youtube", "tiktok"],
+                                       help="Platform to toggle")
+    config_platform_parser.add_argument("action", choices=["enable", "disable"],
+                                       help="Action to perform")
+    config_platform_parser.set_defaults(func=config_toggle_platform)
+    
+    # Reset config
+    config_reset_parser = config_subparsers.add_parser("reset", help="Reset configuration to defaults")
+    config_reset_parser.set_defaults(func=config_reset)
+    
+    # Validate config
+    config_validate_parser = config_subparsers.add_parser("validate", help="Validate current configuration")
+    config_validate_parser.set_defaults(func=config_validate)
+    
     args = parser.parse_args()
     
     if not args.command:
         parser.print_help()
+        return
+    
+    # Handle nested config commands
+    if args.command == "config" and not hasattr(args, 'config_command'):
+        config_parser.print_help()
         return
     
     try:
