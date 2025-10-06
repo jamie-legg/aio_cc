@@ -1,0 +1,29 @@
+[project]
+name = "content-creation"
+version = "0.1.0"
+description = "AI-powered video clip processor that watches for new video files and generates captions"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "google-api-python-client>=2.184.0",
+    "google-auth>=2.41.1",
+    "google-auth-httplib2>=0.2.0",
+    "google-auth-oauthlib>=1.2.2",
+    "openai>=2.1.0",
+    "python-dotenv>=1.1.1",
+    "requests>=2.32.5",
+]
+
+[project.scripts]
+clip-watcher = "content_creation.clip_watcher:main"
+content-cli = "content_creation.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/content_creation"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
