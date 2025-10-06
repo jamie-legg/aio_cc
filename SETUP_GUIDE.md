@@ -2,6 +2,17 @@
 
 This guide walks you through setting up developer accounts and apps for each social media platform.
 
+## 🌐 **Ngrok Setup (Required for OAuth)**
+
+Since many OAuth providers don't support localhost, we use ngrok to create public tunnels:
+
+1. **Sign up for ngrok** (free): https://dashboard.ngrok.com/signup
+2. **Get your auth token**: https://dashboard.ngrok.com/get-started/your-authtoken
+3. **Add to your `.env` file**:
+   ```
+   NGROK_AUTH_TOKEN=your_ngrok_auth_token_here
+   ```
+
 ## 🎯 **Quick Setup URLs**
 
 Once you set up GitHub Pages, you can use these URLs for all platforms:
@@ -24,14 +35,20 @@ Once you set up GitHub Pages, you can use these URLs for all platforms:
 - **Terms of Service**: `https://yourusername.github.io/content-creation/terms.html`
 - **Privacy Policy**: `https://yourusername.github.io/content-creation/privacy.html`
 
-### 3. Get Credentials
+### 3. Configure Login Kit
+- Go to your app dashboard
+- Navigate to "Login Kit" section
+- **Redirect URIs**: Will be set dynamically by ngrok (e.g., `https://abc123.ngrok-free.app/callback`)
+- **Scopes**: Enable `user.info.basic` and `video.publish`
+
+### 4. Get Credentials
 - Go to your app dashboard
 - Copy `Client Key` and `Client Secret`
 - Add to your `.env` file:
   ```
   TIKTOK_CLIENT_KEY=your_client_key_here
   TIKTOK_CLIENT_SECRET=your_client_secret_here
-  TIKTOK_REDIRECT_URI=https://localhost:8080/callback
+  # Redirect URI will be set dynamically by ngrok
   ```
 
 ## 📸 **Instagram/Facebook Developers**
@@ -54,8 +71,8 @@ Once you set up GitHub Pages, you can use these URLs for all platforms:
 - Click "Create New App"
 
 ### 4. Configure OAuth
-- **Valid OAuth Redirect URIs**: `https://localhost:8080/callback`
-- **Deauthorize Callback URL**: `https://localhost:8080/callback`
+- **Valid OAuth Redirect URIs**: Will be set dynamically by ngrok
+- **Deauthorize Callback URL**: Will be set dynamically by ngrok
 - **Data Deletion Request URL**: `https://yourusername.github.io/content-creation/privacy.html`
 
 ### 5. Get Credentials
@@ -64,7 +81,7 @@ Once you set up GitHub Pages, you can use these URLs for all platforms:
   ```
   INSTAGRAM_CLIENT_ID=your_app_id_here
   INSTAGRAM_CLIENT_SECRET=your_app_secret_here
-  INSTAGRAM_REDIRECT_URI=https://localhost:8080/callback
+  # Redirect URI will be set dynamically by ngrok
   ```
 
 ## 🎥 **YouTube/Google Cloud Console**

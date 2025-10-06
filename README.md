@@ -35,13 +35,18 @@ uv sync
    # Edit .env with your API credentials
    ```
 
-2. Set up your social media API credentials:
-   - **OpenAI**: Get your API key from [OpenAI Platform](https://platform.openai.com/api-keys)
-   - **Instagram**: Create an app at [Facebook Developers](https://developers.facebook.com/)
-   - **YouTube**: Create a project and enable YouTube Data API v3 in [Google Cloud Console](https://console.cloud.google.com/)
-   - **TikTok**: Apply for access at [TikTok for Developers](https://developers.tiktok.com/)
+2. Set up ngrok for OAuth callbacks:
+   - Sign up for a free account at [ngrok](https://dashboard.ngrok.com/signup)
+   - Get your auth token from [ngrok dashboard](https://dashboard.ngrok.com/get-started/your-authtoken)
+   - Add `NGROK_AUTH_TOKEN=your_token_here` to your `.env` file
 
-3. Authenticate with social media platforms:
+3. Set up your social media API credentials:
+   - **OpenAI**: Get your API key from [OpenAI Platform](https://platform.openai.com/api-keys)
+- **Instagram**: Create an app at [Facebook Developers](https://developers.facebook.com/) (redirect URI will be set dynamically)
+- **YouTube**: Create a project and enable YouTube Data API v3 in [Google Cloud Console](https://console.cloud.google.com/)
+- **TikTok**: Apply for access at [TikTok for Developers](https://developers.tiktok.com/) (redirect URI will be set dynamically)
+
+4. Authenticate with social media platforms:
    ```bash
    # Authenticate with all platforms
    uv run content-cli auth all
@@ -52,7 +57,7 @@ uv sync
    uv run content-cli auth tiktok
    ```
 
-4. Make sure your video files are saved to `~/Movies` directory
+5. Make sure your video files are saved to `~/Movies` directory
 
 ## Usage
 
@@ -174,7 +179,11 @@ content-creation/
 
 ### TikTok Requirements
 - Requires TikTok for Developers account approval
-- Videos are uploaded as public by default
+- Videos are uploaded to your TikTok inbox for review and posting
+- **Supported formats**: MP4, MOV, AVI, 3GP
+- **Maximum file size**: 4GB
+- **Maximum duration**: 10 minutes
+- **Recommended**: H.264 codec, 1080p resolution
 - Uses TikTok for Developers API
 
 ## Troubleshooting

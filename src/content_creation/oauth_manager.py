@@ -12,6 +12,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from dotenv import load_dotenv
+from .callback_server import handle_oauth_flow
 
 load_dotenv()
 
@@ -21,6 +22,8 @@ class OAuthCredentials:
     access_token: str
     refresh_token: Optional[str] = None
     expires_at: Optional[int] = None
+    scope: Optional[str] = None
+    user_id: Optional[str] = None
     platform: str = ""
 
 class OAuthManager:
@@ -69,13 +72,28 @@ class OAuthManager:
         """Authenticate with Instagram Basic Display API."""
         client_id = os.getenv("INSTAGRAM_CLIENT_ID")
         client_secret = os.getenv("INSTAGRAM_CLIENT_SECRET")
-        redirect_uri = os.getenv("INSTAGRAM_REDIRECT_URI", "https://localhost:8080/callback")
+        # Will be set dynamically by callback server
+        redirect_uri = None
         
         if not client_id or not client_secret:
             print("Instagram credentials not found. Please set INSTAGRAM_CLIENT_ID and INSTAGRAM_CLIENT_SECRET")
             return False
         
-        # Step 1: Get authorization code
+        print("Starting Instagram authentication...")
+        
+        # Start callback server first to get the redirect URI
+        from .callback_server import OAuthCallbackServer
+        # Use reserved ngrok domain for consistent URLs
+        ngrok_domain = os.getenv("NGROK_DOMAIN", "uninclinable-ontogenetic-leoma.ngrok-free.dev")
+        temp_server = OAuthCallbackServer(use_ngrok=True, ngrok_domain=ngrok_domain)
+        if not temp_server.start_server():
+            print("Failed to start callback server")
+            return False
+        
+        redirect_uri = temp_server.get_callback_url()
+        print(f"Using redirect URI: {redirect_uri}")
+        
+        # Step 1: Get authorization code using callback server
         auth_url = (
             f"https://api.instagram.com/oauth/authorize"
             f"?client_id={client_id}"
@@ -84,11 +102,19 @@ class OAuthManager:
             f"&response_type=code"
         )
         
-        print(f"Please visit this URL to authorize the application:")
-        print(auth_url)
-        webbrowser.open(auth_url)
+        callback_result = handle_oauth_flow(auth_url, use_ngrok=True, server=temp_server)
         
-        auth_code = input("Enter the authorization code from the callback URL: ").strip()
+        # Clean up temp server
+        temp_server.stop_server()
+        
+        if callback_result.get('error'):
+            print(f"Instagram authentication failed: {callback_result.get('error_description', callback_result['error'])}")
+            return False
+        
+        auth_code = callback_result.get('code')
+        if not auth_code:
+            print("No authorization code received")
+            return False
         
         # Step 2: Exchange code for access token
         token_url = "https://api.instagram.com/oauth/access_token"
@@ -166,35 +192,65 @@ class OAuthManager:
         """Authenticate with TikTok for Developers API."""
         client_key = os.getenv("TIKTOK_CLIENT_KEY")
         client_secret = os.getenv("TIKTOK_CLIENT_SECRET")
-        redirect_uri = os.getenv("TIKTOK_REDIRECT_URI", "https://localhost:8080/callback")
+        # Will be set dynamically by callback server
+        redirect_uri = None
         
         if not client_key or not client_secret:
             print("TikTok credentials not found. Please set TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET")
             return False
         
-        # Step 1: Get authorization code
+        print("Starting TikTok authentication...")
+        
+        # Start callback server first to get the redirect URI
+        from .callback_server import OAuthCallbackServer
+        # Use reserved ngrok domain for consistent URLs
+        ngrok_domain = os.getenv("NGROK_DOMAIN", "uninclinable-ontogenetic-leoma.ngrok-free.dev")
+        temp_server = OAuthCallbackServer(use_ngrok=True, ngrok_domain=ngrok_domain)
+        if not temp_server.start_server():
+            print("Failed to start callback server")
+            return False
+        
+        redirect_uri = temp_server.get_callback_url()
+        print(f"Using redirect URI: {redirect_uri}")
+        
+        # Step 1: Get authorization code using callback server
+        import secrets
+        state = secrets.token_urlsafe(32)
+        
         auth_url = (
-            f"https://www.tiktok.com/auth/authorize/"
+            f"https://www.tiktok.com/v2/auth/authorize/"
             f"?client_key={client_key}"
             f"&response_type=code"
-            f"&scope=user.info.basic,video.publish"
+            f"&scope=user.info.basic,video.publish,video.upload"
             f"&redirect_uri={redirect_uri}"
+            f"&state={state}"
+            f"&disable_auto_auth=1"
         )
         
-        print(f"Please visit this URL to authorize the application:")
-        print(auth_url)
-        webbrowser.open(auth_url)
+        callback_result = handle_oauth_flow(auth_url, use_ngrok=True, server=temp_server)
         
-        auth_code = input("Enter the authorization code from the callback URL: ").strip()
+        # Clean up temp server
+        temp_server.stop_server()
+        
+        if callback_result.get('error'):
+            print(f"TikTok authentication failed: {callback_result.get('error_description', callback_result['error'])}")
+            return False
+        
+        auth_code = callback_result.get('code')
+        if not auth_code:
+            print("No authorization code received")
+            print(f"Callback result: {callback_result}")
+            return False
+        
         
         # Step 2: Exchange code for access token
-        token_url = "https://open-api.tiktok.com/oauth/access_token/"
+        token_url = "https://open.tiktokapis.com/v2/oauth/token/"
         token_data = {
             "client_key": client_key,
             "client_secret": client_secret,
             "code": auth_code,
             "grant_type": "authorization_code",
-            "redirect_uri": redirect_uri
+            "redirect_uri": redirect_uri,
         }
         
         try:
@@ -208,9 +264,11 @@ class OAuthManager:
                 return False
             
             self.credentials["tiktok"] = OAuthCredentials(
-                access_token=token_info["data"]["access_token"],
-                refresh_token=token_info["data"].get("refresh_token"),
-                expires_at=token_info["data"].get("expires_in"),
+                access_token=token_info["access_token"],
+                refresh_token=token_info.get("refresh_token"),
+                expires_at=token_info.get("expires_in"),
+                scope=token_info.get("scope"),
+                user_id=token_info.get("open_id"),
                 platform="tiktok"
             )
             
