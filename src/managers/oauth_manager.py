@@ -69,7 +69,7 @@ class OAuthManager:
             json.dump(data, f, indent=2)
     
     def authenticate_instagram(self) -> bool:
-        """Authenticate with Instagram Basic Display API."""
+        """Authenticate with Instagram Graph API for business accounts."""
         client_id = os.getenv("INSTAGRAM_CLIENT_ID")
         client_secret = os.getenv("INSTAGRAM_CLIENT_SECRET")
         # Will be set dynamically by callback server
@@ -79,7 +79,8 @@ class OAuthManager:
             print("Instagram credentials not found. Please set INSTAGRAM_CLIENT_ID and INSTAGRAM_CLIENT_SECRET")
             return False
         
-        print("Starting Instagram authentication...")
+        print("Starting Instagram Graph API authentication...")
+        print("Note: This requires a Facebook Page connected to an Instagram Business Account")
         
         # Start callback server first to get the redirect URI
         from .callback_server import OAuthCallbackServer
@@ -93,12 +94,12 @@ class OAuthManager:
         redirect_uri = temp_server.get_callback_url()
         print(f"Using redirect URI: {redirect_uri}")
         
-        # Step 1: Get authorization code using callback server
+        # Step 1: Get authorization code using Instagram Business Login
         auth_url = (
             f"https://api.instagram.com/oauth/authorize"
             f"?client_id={client_id}"
             f"&redirect_uri={redirect_uri}"
-            f"&scope=user_profile,user_media"
+            f"&scope=instagram_business_basic,instagram_business_content_publish"
             f"&response_type=code"
         )
         
@@ -132,13 +133,25 @@ class OAuthManager:
             
             token_info = response.json()
             
+            if 'error' in token_info:
+                print(f"Instagram authentication failed: {token_info['error']['message']}")
+                return False
+            
+            # Get long-lived access token
+            long_lived_url = f"https://graph.instagram.com/access_token?grant_type=ig_exchange_token&client_secret={client_secret}&access_token={token_info['access_token']}"
+            long_lived_response = requests.get(long_lived_url)
+            long_lived_response.raise_for_status()
+            long_lived_info = long_lived_response.json()
+            
             self.credentials["instagram"] = OAuthCredentials(
-                access_token=token_info["access_token"],
+                access_token=long_lived_info.get("access_token", token_info["access_token"]),
+                expires_at=long_lived_info.get("expires_in"),
                 platform="instagram"
             )
             
             self._save_credentials()
-            print("Instagram authentication successful!")
+            print("Instagram Graph API authentication successful!")
+            print("You can now upload Reels to your Instagram Business Account")
             return True
             
         except Exception as e:

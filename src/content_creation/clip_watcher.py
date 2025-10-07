@@ -2,7 +2,6 @@
 import os
 import time
 import json
-from openai import OpenAI
 from pathlib import Path
 from datetime import datetime
 import subprocess
@@ -11,20 +10,19 @@ from dotenv import load_dotenv
 from .oauth_manager import OAuthManager
 from .upload_manager import UploadManager
 from .config_manager import ConfigManager
+from .ai_manager import AIManager
+from .video_processor import VideoProcessor
 
 # Load environment variables
 load_dotenv()
 
-# Initialize configuration manager
+# Initialize managers
 config_manager = ConfigManager()
 config = config_manager.get_config()
-
-# Initialize OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-# Initialize OAuth and Upload managers
 oauth_manager = OAuthManager()
 upload_manager = UploadManager(oauth_manager)
+ai_manager = AIManager()
+video_processor = VideoProcessor()
 
 def is_video_complete(path):
     """Return True when the file is stable (not growing)."""
@@ -34,22 +32,10 @@ def is_video_complete(path):
     return size1 == size2
 
 def generate_ai_caption(filename):
-    prompt = f"""
-    You are a social media strategist.
-    Create an engaging, short title and caption for a 30-second gaming or reaction clip.
-    The filename is "{filename}".
-    Output JSON with keys: title, caption, hashtags.
-    """
-    completion = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.8,
-    )
-    text = completion.choices[0].message.content
-    try:
-        return json.loads(text)
-    except Exception:
-        return {"title": text.strip(), "caption": "", "hashtags": ""}
+    """Generate AI metadata using the new AI manager."""
+    # Detect game context from filename
+    game_context = "armagetron advanced | retroycycles"
+    return ai_manager.generate_metadata(filename, game_context)
 
 def process_clip(path):
     print(f"[+] Detected new clip: {path.name}")
@@ -57,6 +43,81 @@ def process_clip(path):
         print("...waiting for file to finish writing")
         time.sleep(5)
 
+    # Check if FFmpeg is available
+    if not video_processor.is_ffmpeg_available():
+        print("⚠️  FFmpeg not available. Videos will not be processed for Shorts.")
+        print("   Install FFmpeg to enable video processing: https://ffmpeg.org/download.html")
+        process_video_without_ffmpeg(path)
+        return
+
+    # Check video requirements for YouTube Shorts
+    try:
+        requirements = video_processor.check_video_requirements(path)
+        print(f"📊 Video analysis:")
+        print(f"   Duration: {requirements['duration']:.1f}s (max: {requirements['max_duration']}s)")
+        print(f"   Aspect ratio: {requirements['current_ratio']:.2f} (target: {requirements['target_ratio']:.2f})")
+        print(f"   Needs processing: {'Yes' if requirements['needs_processing'] else 'No'}")
+    except Exception as e:
+        print(f"⚠️  Could not analyze video: {e}")
+        requirements = {'needs_processing': True}
+
+    # Generate AI metadata
+    ai_meta = generate_ai_caption(path.name)
+    print(f"AI generated: {ai_meta.get('title')}")
+
+    # Get current config
+    current_config = config_manager.get_config()
+    processed_dir = Path(current_config.processed_dir)
+    processed_dir.mkdir(exist_ok=True)
+
+    # Process video for Shorts if needed
+    processed_video_path = None
+    if requirements.get('needs_processing', True):
+        try:
+            print("🎬 Processing video for YouTube Shorts...")
+            
+            # Look for audio track
+            audio_track = video_processor.find_audio_track(path)
+            if not audio_track:
+                audio_track = video_processor.get_default_audio_track()
+                if audio_track:
+                    print(f"🎵 Using default audio track: {audio_track.name}")
+            else:
+                print(f"🎵 Found matching audio track: {audio_track.name}")
+            
+            # Process with audio and fade effects
+            processed_video_path = video_processor.process_for_shorts(
+                path, 
+                processed_dir / f"{path.stem}_shorts{path.suffix}",
+                audio_track=audio_track,
+                fade_duration=1.0  # 1 second fade in/out
+            )
+            print(f"✅ Video processed: {processed_video_path.name}")
+        except Exception as e:
+            print(f"❌ Video processing failed: {e}")
+            print("   Continuing with original video...")
+            processed_video_path = None
+
+    # Save JSON metadata
+    out_json = processed_dir / f"{path.stem}.json"
+    with open(out_json, "w") as f:
+        json.dump(ai_meta, f, indent=2)
+
+    # Move original video to processed folder
+    new_path = processed_dir / path.name
+    path.rename(new_path)
+    print(f"[✓] Saved metadata: {out_json}\n[→] Moved clip: {new_path}")
+    
+    # Use processed video for uploads if available, otherwise use original
+    upload_path = processed_video_path if processed_video_path else new_path
+    if processed_video_path:
+        print(f"📤 Using processed video for uploads: {upload_path.name}")
+    
+    # Upload to social media platforms
+    upload_to_social_media(upload_path, ai_meta)
+
+def process_video_without_ffmpeg(path):
+    """Process video without FFmpeg (fallback)."""
     ai_meta = generate_ai_caption(path.name)
     print(f"AI generated: {ai_meta.get('title')}")
 
@@ -80,6 +141,7 @@ def process_clip(path):
 
 def upload_to_social_media(video_path, metadata):
     """Upload video to configured social media platforms."""
+    
     # Get current config
     current_config = config_manager.get_config()
     

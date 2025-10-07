@@ -1,16 +1,19 @@
 # Content Creation - AI Video Clip Processor
 
-An AI-powered tool that watches for new video files and automatically generates engaging social media captions and metadata.
+An AI-powered tool that watches for new video files, automatically processes them for social media, and uploads to multiple platforms with engaging captions and metadata.
 
 ## Features
 
-- **File Watching**: Monitors the `~/Movies` directory for new `.mov` files
-- **AI Caption Generation**: Uses OpenAI's GPT-4o-mini to create engaging titles, captions, and hashtags
-- **Automatic Processing**: Moves processed files to a `Processed` folder with metadata
-- **File Stability Detection**: Waits for files to finish writing before processing
-- **Multi-Platform Upload**: Automatically uploads videos to Instagram Reels, YouTube Shorts, and TikTok
+- **File Watching**: Monitors directories for new video files (`.mov`, `.mp4`, `.avi`, `.mkv`, `.webm`)
+- **AI Caption Generation**: Uses OpenAI's GPT-4o-mini with structured JSON schema to create engaging titles, captions, and hashtags
+- **Video Processing**: Automatically converts videos to 9:16 aspect ratio for YouTube Shorts
+- **Audio Mixing**: Automatically adds background music and audio tracks to videos
+- **Fade Effects**: Applies smooth fade in/out transitions to videos and audio
+- **Multi-Platform Upload**: Uploads to Instagram Reels, YouTube Shorts, and TikTok
+- **FTP Video Hosting**: Uses MinIO FTP server for reliable video hosting
 - **OAuth Authentication**: Secure authentication with all major social media platforms
-- **CLI Management**: Command-line tools for authentication and testing
+- **CLI Management**: Command-line tools for authentication, testing, and configuration
+- **Modular Architecture**: Clean separation of platform-specific upload logic for easy maintenance and extension
 
 ## Installation
 
@@ -21,10 +24,23 @@ This project uses `uv` for dependency management. Make sure you have `uv` instal
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Then install the project dependencies:
+Install the project dependencies:
 
 ```bash
 uv sync
+```
+
+Install FFmpeg for video processing:
+
+```bash
+# macOS (using Homebrew)
+brew install ffmpeg
+
+# Ubuntu/Debian
+sudo apt update && sudo apt install ffmpeg
+
+# Windows (using Chocolatey)
+choco install ffmpeg
 ```
 
 ## Setup
@@ -42,11 +58,17 @@ uv sync
 
 3. Set up your social media API credentials:
    - **OpenAI**: Get your API key from [OpenAI Platform](https://platform.openai.com/api-keys)
-- **Instagram**: Create an app at [Facebook Developers](https://developers.facebook.com/) (redirect URI will be set dynamically)
-- **YouTube**: Create a project and enable YouTube Data API v3 in [Google Cloud Console](https://console.cloud.google.com/)
-- **TikTok**: Apply for access at [TikTok for Developers](https://developers.tiktok.com/) (redirect URI will be set dynamically)
+   - **Instagram**: Create an app at [Facebook Developers](https://developers.facebook.com/) (redirect URI will be set dynamically)
+   - **YouTube**: Create a project and enable YouTube Data API v3 in [Google Cloud Console](https://console.cloud.google.com/)
+   - **TikTok**: Apply for access at [TikTok for Developers](https://developers.tiktok.com/) (redirect URI will be set dynamically)
 
-4. Authenticate with social media platforms:
+4. Set up FTP server for video hosting (MinIO):
+   - **FTP_URL**: Your MinIO server endpoint
+   - **FTP_ACCESS_KEY**: Your MinIO access key
+   - **FTP_SECRET_KEY**: Your MinIO secret key
+   - **FTP_BUCKET**: Bucket name for video storage
+
+5. Authenticate with social media platforms:
    ```bash
    # Authenticate with all platforms
    uv run content-cli auth all
@@ -57,7 +79,24 @@ uv sync
    uv run content-cli auth tiktok
    ```
 
-5. Make sure your video files are saved to `~/Movies` directory
+6. Set up audio tracks (optional):
+   ```bash
+   # Create audio directory
+   mkdir audio
+   
+   # Add default background music
+   cp your_music.mp3 audio/default.mp3
+   
+   # Or add specific tracks for videos
+   cp track1.mp3 audio/Replay_2025-10-07_10-31-10.mp3
+   ```
+
+7. Configure your watch directory:
+   ```bash
+   # Set where to watch for new videos
+   uv run content-cli config set-watch-dir ~/Movies
+   uv run content-cli config set-processed-dir ~/Movies/Processed
+   ```
 
 ## Usage
 
@@ -72,11 +111,18 @@ uv run clip-watcher
 ```
 
 The tool will:
-1. Watch for new `.mov` files in `~/Movies`
-2. Generate AI captions and metadata
-3. Save metadata as JSON files
-4. Move processed videos to `~/Movies/Processed`
-5. Upload videos to configured social media platforms
+1. Watch for new video files in your configured directory
+2. **Process videos for social media**:
+   - Convert to 9:16 aspect ratio for YouTube Shorts
+   - Add background music (if available)
+   - Apply fade in/out effects
+3. **Generate AI captions and metadata**:
+   - Create engaging titles with emojis
+   - Write Gen Z-style captions
+   - Generate relevant hashtags
+4. Save metadata as JSON files
+5. Move processed videos to the processed directory
+6. Upload videos to configured social media platforms
 
 ### CLI Management
 
@@ -88,6 +134,18 @@ uv run content-cli check all
 Test upload functionality:
 ```bash
 uv run content-cli test --video path/to/your/video.mov --platform all
+```
+
+Test video processing:
+```bash
+# Test basic video processing
+uv run python test_video_processor.py
+
+# Test audio processing and fade effects
+uv run python test_audio_processing.py
+
+# Test AI metadata generation
+uv run python test_ai_manager.py
 ```
 
 ### Configuration Management
@@ -148,20 +206,56 @@ The tool now supports flexible configuration through the CLI. You can:
 
 Configuration is stored in `~/.content_creation/config.json` and takes precedence over environment variables.
 
+## Architecture
+
+The project follows a modular architecture with clear separation of concerns:
+
+### Core Components
+- **`UploadManager`**: Main coordinator that orchestrates uploads across platforms
+- **`FTPUploader`**: Handles video hosting via MinIO/S3-compatible storage
+- **`AIManager`**: Generates engaging metadata using OpenAI
+- **`VideoProcessor`**: Handles video processing for social media requirements
+
+### Platform Uploaders
+Each social media platform has its own dedicated uploader module:
+- **`InstagramUploader`**: Handles Instagram Reels uploads via Graph API
+- **`YouTubeUploader`**: Manages YouTube Shorts uploads with retry logic
+- **`TikTokUploader`**: Processes TikTok uploads via Content Posting API
+
+### Benefits
+- **Maintainability**: Platform-specific logic is isolated and easy to modify
+- **Extensibility**: Adding new platforms requires only creating a new uploader module
+- **Testability**: Each component can be tested independently
+- **Reusability**: Uploaders can be used independently of the main manager
+
 ## Project Structure
 
 ```
 content-creation/
 ├── src/
-│   └── content_creation/
+│   ├── content_creation/
+│   │   ├── __init__.py
+│   │   ├── clip_watcher.py      # Main file watcher and processor
+│   │   ├── oauth_manager.py     # OAuth authentication for social platforms
+│   │   ├── upload_manager.py    # Main upload coordinator
+│   │   ├── types.py             # Common types and FTP uploader
+│   │   ├── ai_manager.py        # AI-powered metadata generation
+│   │   ├── video_processor.py   # Video processing and audio mixing
+│   │   ├── config_manager.py    # Configuration management
+│   │   └── cli.py              # Command-line interface
+│   └── platform_uploaders/     # Platform-specific upload modules
 │       ├── __init__.py
-│       ├── clip_watcher.py      # Main file watcher and processor
-│       ├── oauth_manager.py     # OAuth authentication for social platforms
-│       ├── upload_manager.py    # Video upload to social platforms
-│       └── cli.py              # Command-line interface
+│       ├── instagram.py         # Instagram Reels uploader
+│       ├── youtube.py           # YouTube Shorts uploader
+│       └── tiktok.py            # TikTok uploader
+├── audio/                      # Audio tracks directory
+│   ├── README.md              # Audio setup instructions
+│   ├── default.mp3            # Default background music
+│   └── *.mp3                  # Video-specific audio tracks
 ├── main.py                     # Entry point
 ├── pyproject.toml             # Project configuration
 ├── env.example               # Environment variables template
+├── test_*.py                 # Test scripts
 └── README.md
 ```
 
@@ -176,6 +270,9 @@ content-creation/
 - Requires a YouTube channel
 - Videos are uploaded as public by default
 - Uses YouTube Data API v3
+- **Video Processing**: Automatically converts to 9:16 aspect ratio for Shorts
+- **Duration**: Maximum 3 minutes for Shorts
+- **Format**: MP4, MOV, AVI, MKV, WebM
 
 ### TikTok Requirements
 - Requires TikTok for Developers account approval
@@ -185,6 +282,23 @@ content-creation/
 - **Maximum duration**: 10 minutes
 - **Recommended**: H.264 codec, 1080p resolution
 - Uses TikTok for Developers API
+
+## Audio Processing
+
+### Audio Track Setup
+The system automatically looks for audio tracks in the following order:
+
+1. **Video-specific tracks**: `audio/Replay_2025-10-07_10-31-10.mp3`
+2. **Default tracks**: `audio/default.mp3`, `audio/background.mp3`, `audio/music.mp3`
+3. **No audio**: Videos are processed without additional audio
+
+### Supported Audio Formats
+- MP3, WAV, AAC, M4A, OGG
+
+### Fade Effects
+- **Configurable duration**: Default 1 second fade in/out
+- **Smart timing**: Fade duration is limited to half the video duration
+- **Both video and audio**: Fade effects are applied to both video and audio tracks
 
 ## Troubleshooting
 
@@ -197,3 +311,31 @@ content-creation/
 - Check your internet connection
 - Verify video file format is supported by each platform
 - Ensure you have sufficient storage/quota on each platform
+
+### Video Processing Issues
+- **FFmpeg not found**: Install FFmpeg using the instructions above
+- **Audio mixing fails**: Check that audio files are in supported formats
+- **Aspect ratio issues**: The system automatically handles 9:16 conversion
+
+### FTP Server Issues
+- Verify FTP credentials in `.env`
+- Check that the FTP server is accessible
+- Ensure the bucket exists and has proper permissions
+
+## Security
+
+### Important Security Notes
+- **Never commit credentials**: All API keys and secrets should be stored in `.env` file only
+- **Use environment variables**: Never hardcode credentials in source code
+- **Keep .env private**: Add `.env` to `.gitignore` (already included)
+- **Rotate credentials**: Regularly update your API keys and secrets
+- **Use least privilege**: Only grant necessary permissions to your API keys
+
+### Required Environment Variables
+Make sure to set all required environment variables in your `.env` file:
+- `OPENAI_API_KEY`
+- `NGROK_AUTH_TOKEN`
+- `INSTAGRAM_CLIENT_ID` & `INSTAGRAM_CLIENT_SECRET`
+- `YOUTUBE_CLIENT_ID` & `YOUTUBE_CLIENT_SECRET`
+- `TIKTOK_CLIENT_KEY` & `TIKTOK_CLIENT_SECRET`
+- `FTP_URL`, `FTP_ACCESS_KEY`, `FTP_SECRET_KEY`, `FTP_BUCKET`
