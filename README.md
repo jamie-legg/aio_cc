@@ -215,6 +215,9 @@ The project follows a modular architecture with clear separation of concerns:
 - **`FTPUploader`**: Handles video hosting via MinIO/S3-compatible storage
 - **`AIManager`**: Generates engaging metadata using OpenAI
 - **`VideoProcessor`**: Handles video processing for social media requirements
+- **`OAuthManager`**: Manages authentication for all social media platforms
+- **`ConfigManager`**: Handles application configuration and settings
+- **`NgrokManager`**: Manages ngrok tunnels for OAuth callbacks
 
 ### Platform Uploaders
 Each social media platform has its own dedicated uploader module:
@@ -222,40 +225,49 @@ Each social media platform has its own dedicated uploader module:
 - **`YouTubeUploader`**: Manages YouTube Shorts uploads with retry logic
 - **`TikTokUploader`**: Processes TikTok uploads via Content Posting API
 
+### Folder Organization
+- **`content_creation/`**: Core application logic and main entry points
+- **`managers/`**: Centralized manager modules for different aspects of the system
+- **`platform_uploaders/`**: Platform-specific upload implementations
+
 ### Benefits
 - **Maintainability**: Platform-specific logic is isolated and easy to modify
 - **Extensibility**: Adding new platforms requires only creating a new uploader module
 - **Testability**: Each component can be tested independently
 - **Reusability**: Uploaders can be used independently of the main manager
+- **Organization**: Clear separation between core logic, managers, and platform-specific code
 
 ## Project Structure
 
 ```
 content-creation/
 ├── src/
-│   ├── content_creation/
+│   ├── content_creation/       # Core application logic
 │   │   ├── __init__.py
-│   │   ├── clip_watcher.py      # Main file watcher and processor
-│   │   ├── oauth_manager.py     # OAuth authentication for social platforms
-│   │   ├── upload_manager.py    # Main upload coordinator
-│   │   ├── types.py             # Common types and FTP uploader
-│   │   ├── ai_manager.py        # AI-powered metadata generation
-│   │   ├── video_processor.py   # Video processing and audio mixing
-│   │   ├── config_manager.py    # Configuration management
-│   │   └── cli.py              # Command-line interface
-│   └── platform_uploaders/     # Platform-specific upload modules
+│   │   ├── clip_watcher.py     # Main file watcher and processor
+│   │   ├── types.py            # Common types and FTP uploader
+│   │   ├── video_processor.py  # Video processing and audio mixing
+│   │   ├── callback_server.py  # OAuth callback server
+│   │   └── cli.py             # Command-line interface
+│   ├── managers/              # Core manager modules
+│   │   ├── ai_manager.py       # AI-powered metadata generation
+│   │   ├── config_manager.py   # Configuration management
+│   │   ├── ngrok_manager.py    # Ngrok tunnel management
+│   │   ├── oauth_manager.py    # OAuth authentication for social platforms
+│   │   └── upload_manager.py   # Main upload coordinator
+│   └── platform_uploaders/    # Platform-specific upload modules
 │       ├── __init__.py
-│       ├── instagram.py         # Instagram Reels uploader
-│       ├── youtube.py           # YouTube Shorts uploader
-│       └── tiktok.py            # TikTok uploader
-├── audio/                      # Audio tracks directory
-│   ├── README.md              # Audio setup instructions
-│   ├── default.mp3            # Default background music
-│   └── *.mp3                  # Video-specific audio tracks
-├── main.py                     # Entry point
-├── pyproject.toml             # Project configuration
-├── env.example               # Environment variables template
-├── test_*.py                 # Test scripts
+│       ├── instagram.py        # Instagram Reels uploader
+│       ├── youtube.py          # YouTube Shorts uploader
+│       └── tiktok.py           # TikTok uploader
+├── audio/                     # Audio tracks directory
+│   ├── README.md             # Audio setup instructions
+│   ├── default.mp3           # Default background music
+│   └── *.mp3                 # Video-specific audio tracks
+├── main.py                    # Entry point
+├── pyproject.toml            # Project configuration
+├── env.example              # Environment variables template
+├── test_*.py                # Test scripts
 └── README.md
 ```
 
