@@ -15,7 +15,7 @@ def setup_auth(args):
         results = oauth_manager.authenticate_all()
         print("\n=== Authentication Results ===")
         for platform, success in results.items():
-            status = "✅ Success" if success else "❌ Failed"
+            status = "[SUCCESS] Success" if success else "[ERROR] Failed"
             print(f"{platform.upper()}: {status}")
     else:
         if args.platform == "instagram":
@@ -29,9 +29,9 @@ def setup_auth(args):
             return
         
         if success:
-            print(f"✅ {args.platform.upper()} authentication successful!")
+            print(f"[SUCCESS] {args.platform.upper()} authentication successful!")
         else:
-            print(f"❌ {args.platform.upper()} authentication failed!")
+            print(f"[ERROR] {args.platform.upper()} authentication failed!")
 
 def check_auth(args):
     """Check authentication status for platforms."""
@@ -43,7 +43,7 @@ def check_auth(args):
     print("=== Authentication Status ===")
     for platform in platforms:
         if oauth_manager.is_authenticated(platform):
-            print(f"✅ {platform.upper()}: Authenticated")
+            print(f"[SUCCESS] {platform.upper()}: Authenticated")
             
             # Get additional info
             status = upload_manager.get_upload_status(platform)
@@ -58,7 +58,7 @@ def check_auth(args):
                     channel = status["channels"][0]
                     print(f"   Channel: {channel['snippet']['title']}")
         else:
-            print(f"❌ {platform.upper()}: Not authenticated")
+            print(f"[ERROR] {platform.upper()}: Not authenticated")
 
 def test_upload(args):
     """Test upload functionality with a sample video."""
@@ -89,9 +89,9 @@ def test_upload(args):
     print("\n=== Upload Results ===")
     for platform, result in results.items():
         if result.success:
-            print(f"✅ {platform.upper()}: {result.url or result.video_id}")
+            print(f"[SUCCESS] {platform.upper()}: {result.url or result.video_id}")
         else:
-            print(f"❌ {platform.upper()}: {result.error}")
+            print(f"[ERROR] {platform.upper()}: {result.error}")
 
 def config_show(args):
     """Show current configuration."""

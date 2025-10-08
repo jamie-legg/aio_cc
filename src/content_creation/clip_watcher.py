@@ -45,7 +45,7 @@ def process_clip(path):
 
     # Check if FFmpeg is available
     if not video_processor.is_ffmpeg_available():
-        print("⚠️  FFmpeg not available. Videos will not be processed for Shorts.")
+        print("[WARNING] FFmpeg not available. Videos will not be processed for Shorts.")
         print("   Install FFmpeg to enable video processing: https://ffmpeg.org/download.html")
         process_video_without_ffmpeg(path)
         return
@@ -58,7 +58,7 @@ def process_clip(path):
         print(f"   Aspect ratio: {requirements['current_ratio']:.2f} (target: {requirements['target_ratio']:.2f})")
         print(f"   Needs processing: {'Yes' if requirements['needs_processing'] else 'No'}")
     except Exception as e:
-        print(f"⚠️  Could not analyze video: {e}")
+        print(f"[WARNING] Could not analyze video: {e}")
         requirements = {'needs_processing': True}
 
     # Generate AI metadata
@@ -92,9 +92,9 @@ def process_clip(path):
                 audio_track=audio_track,
                 fade_duration=1.0  # 1 second fade in/out
             )
-            print(f"✅ Video processed: {processed_video_path.name}")
+            print(f"[SUCCESS] Video processed: {processed_video_path.name}")
         except Exception as e:
-            print(f"❌ Video processing failed: {e}")
+            print(f"[ERROR] Video processing failed: {e}")
             print("   Continuing with original video...")
             processed_video_path = None
 
@@ -157,11 +157,11 @@ def upload_to_social_media(video_path, metadata):
     # Check authentication for each platform
     for platform in platforms:
         if not oauth_manager.is_authenticated(platform):
-            print(f"⚠️  {platform.upper()} not authenticated. Run 'uv run python -c \"from content_creation.oauth_manager import OAuthManager; OAuthManager().authenticate_{platform}()\"' to authenticate.")
+            print(f"[WARNING] {platform.upper()} not authenticated. Run 'uv run python -c \"from content_creation.oauth_manager import OAuthManager; OAuthManager().authenticate_{platform}()\"' to authenticate.")
             platforms.remove(platform)
     
     if not platforms:
-        print("❌ No authenticated platforms available for upload")
+        print("[ERROR] No authenticated platforms available for upload")
         return
     
     # Upload to authenticated platforms
@@ -171,9 +171,9 @@ def upload_to_social_media(video_path, metadata):
     print(f"\n[📊] Upload Summary:")
     for platform, result in results.items():
         if result.success:
-            print(f"  ✅ {platform.upper()}: {result.url or result.video_id}")
+            print(f"  [SUCCESS] {platform.upper()}: {result.url or result.video_id}")
         else:
-            print(f"  ❌ {platform.upper()}: {result.error}")
+            print(f"  [ERROR] {platform.upper()}: {result.error}")
 
 def watch_folder():
     # Get current config
@@ -207,13 +207,13 @@ def main():
     
     # check for authentication
     if not oauth_manager.is_authenticated("instagram"):
-        print("❌ Instagram not authenticated. Run 'uv run content-cli auth instagram' to authenticate.")
+        print("[ERROR] Instagram not authenticated. Run 'uv run content-cli auth instagram' to authenticate.")
         return
     if not oauth_manager.is_authenticated("youtube"):
-        print("❌ YouTube not authenticated. Run 'uv run content-cli auth youtube' to authenticate.")
+        print("[ERROR] YouTube not authenticated. Run 'uv run content-cli auth youtube' to authenticate.")
         return
     if not oauth_manager.is_authenticated("tiktok"):
-        print("❌ TikTok not authenticated. Run 'uv run content-cli auth tiktok' to authenticate.")
+        print("[ERROR] TikTok not authenticated. Run 'uv run content-cli auth tiktok' to authenticate.")
         return
     
     watch_folder()
