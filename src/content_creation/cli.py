@@ -3,9 +3,9 @@
 import argparse
 import sys
 from pathlib import Path
-from .oauth_manager import OAuthManager
-from .upload_manager import UploadManager
-from .config_manager import ConfigManager
+from managers.oauth_manager import OAuthManager
+from managers.upload_manager import UploadManager
+from managers.config_manager import ConfigManager
 
 def setup_auth(args):
     """Set up authentication for social media platforms."""

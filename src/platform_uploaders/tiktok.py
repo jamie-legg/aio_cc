@@ -6,8 +6,8 @@ from typing import Dict, Optional
 from dataclasses import dataclass
 import requests
 
-from ..content_creation.oauth_manager import OAuthCredentials
-from ..content_creation.types import UploadResult
+from managers.oauth_manager import OAuthCredentials
+from content_creation.types import UploadResult
 
 
 @dataclass
@@ -83,9 +83,8 @@ class TikTokUploader:
                     return UploadResult("tiktok", False, error=status_result["error"]["message"])
                 
                 status = status_result["data"]["status"]
-                print(f"Upload status: {status}")
                 
-                if status == "PROCESSING_DONE":
+                if status in ["PROCESSING_DONE", "SEND_TO_USER_INBOX"]:
                     # Upload successful - video is now in user's inbox
                     video_id = status_result["data"].get("publish_id", publish_id)
                     return UploadResult(

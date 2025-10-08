@@ -12,9 +12,9 @@ class Config:
     watch_dir: str = str(Path.home() / "Movies")
     processed_dir: str = str(Path.home() / "Movies" / "Processed")
     video_extensions: list = None
-    upload_to_instagram: bool = True
-    upload_to_youtube: bool = True
-    upload_to_tiktok: bool = True
+    upload_to_instagram: bool = os.getenv("UPLOAD_TO_INSTAGRAM", True)
+    upload_to_youtube: bool = os.getenv("UPLOAD_TO_YOUTUBE", True)
+    upload_to_tiktok: bool = os.getenv("UPLOAD_TO_TIKTOK", True)
     
     def __post_init__(self):
         if self.video_extensions is None:

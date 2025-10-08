@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Dict, Optional
 from dataclasses import dataclass
 
-from ..content_creation.oauth_manager import OAuthCredentials
-from ..content_creation.types import FTPUploader, UploadResult
+from managers.oauth_manager import OAuthCredentials
+from content_creation.types import FTPUploader, UploadResult
 
 
 @dataclass
@@ -42,6 +42,52 @@ class InstagramUploader:
             
             print(f"✅ Video uploaded to FTP: {video_url}")
             
+            # Test if the video URL is accessible
+            try:
+                print("🔍 DEBUG: Testing video URL accessibility...")
+                print(f"🔍 DEBUG: Testing URL: {video_url}")
+                test_response = requests.head(video_url, timeout=10, allow_redirects=True)
+                print(f"🔍 DEBUG: Video URL test response: {test_response.status_code}")
+                if test_response.status_code != 200:
+                    print(f"⚠️  Video URL might not be accessible: {test_response.status_code}")
+                    print(f"🔍 DEBUG: Response headers: {dict(test_response.headers)}")
+                else:
+                    print("✅ Video URL is accessible")
+            except Exception as e:
+                print(f"⚠️  Could not test video URL accessibility: {e}")
+                print(f"🔍 DEBUG: This might cause Instagram processing to fail")
+            
+            # Validate video for Instagram Reels
+            try:
+                from content_creation.video_processor import VideoProcessor
+                vp = VideoProcessor()
+                instagram_check = vp.check_instagram_requirements(video_path)
+                
+                print(f"🔍 DEBUG: Instagram compliance check:")
+                print(f"   Duration: {instagram_check.get('duration', 0):.1f}s")
+                print(f"   Resolution: {instagram_check.get('width', 0)}x{instagram_check.get('height', 0)}")
+                print(f"   Frame rate: {instagram_check.get('fps', 0):.1f}fps")
+                print(f"   Video codec: {instagram_check.get('codec', 'unknown')}")
+                print(f"   File size: {instagram_check.get('file_size', 0) / (1024*1024):.1f}MB")
+                print(f"   Video bitrate: {instagram_check.get('bitrate', 0) / (1024*1024):.1f}Mbps")
+                print(f"   Audio codec: {instagram_check.get('audio_codec', 'unknown')}")
+                print(f"   Audio bitrate: {instagram_check.get('audio_bitrate', 0) / 1000:.0f}kbps")
+                print(f"   Sample rate: {instagram_check.get('sample_rate', 0)}Hz")
+                print(f"   Channels: {instagram_check.get('channels', 0)}")
+                print(f"   Compliant: {instagram_check.get('compliant', False)}")
+                
+                if not instagram_check.get('compliant', False):
+                    issues = instagram_check.get('issues', [])
+                    print(f"⚠️  Instagram compliance issues: {issues}")
+                    # Don't fail immediately, let Instagram handle it, but warn
+                    print("⚠️  Video may not meet Instagram requirements, but continuing...")
+                else:
+                    print("✅ Video meets Instagram Reels requirements")
+                    
+            except Exception as e:
+                print(f"⚠️  Could not validate video: {e}")
+                # Continue anyway, let Instagram handle validation
+            
             # Step 3: Create media container with video_url
             media_url = f"https://graph.instagram.com/v23.0/{instagram_account_id}/media"
             
@@ -63,41 +109,74 @@ class InstagramUploader:
             }
             
             print("Creating Instagram Reels container...")
+            print(f"🔍 DEBUG: Media URL: {media_url}")
+            print(f"🔍 DEBUG: Media data: {media_data}")
+            
             media_response = requests.post(media_url, data=media_data)
+            print(f"🔍 DEBUG: Container response status: {media_response.status_code}")
+            print(f"🔍 DEBUG: Container response: {media_response.text}")
+            
             media_response.raise_for_status()
             
             container_data = media_response.json()
+            print(f"🔍 DEBUG: Container data: {container_data}")
+            
             if 'error' in container_data:
-                return UploadResult("instagram", False, error=f"Container creation failed: {container_data['error']['message']}")
+                error_details = container_data['error']
+                error_msg = error_details.get('message', 'Unknown error')
+                error_code = error_details.get('code', 'Unknown code')
+                error_type = error_details.get('type', 'Unknown type')
+                print(f"❌ Instagram container creation error: {error_type} - {error_msg} (Code: {error_code})")
+                return UploadResult("instagram", False, error=f"Container creation failed: {error_type} - {error_msg}")
             
             container_id = container_data['id']
             print(f"✅ Container created: {container_id}")
             
             # Step 4: Check container status before publishing
-            status_url = f"https://graph.instagram.com/v23.0/{container_id}?fields=status_code&access_token={creds.access_token}"
+            # Request additional fields to get more detailed error information
+            status_url = f"https://graph.instagram.com/v23.0/{container_id}?fields=status_code,status&access_token={creds.access_token}"
             
 
             # Wait for container to be ready (max 5 minutes)
             max_attempts = 30
             for attempt in range(max_attempts):
+                print(f"🔍 DEBUG: Status check attempt {attempt + 1}/{max_attempts}")
+                print(f"🔍 DEBUG: Status URL: {status_url}")
                 status_response = requests.get(status_url)
+                print(f"🔍 DEBUG: Status response code: {status_response.status_code}")
+                print(f"🔍 DEBUG: Status response: {status_response.text}")
                 status_response.raise_for_status()
                 
                 status_data = status_response.json()
                 status = status_data.get('status_code')
+                print(f"🔍 DEBUG: Parsed status: {status}")
+                print(f"🔍 DEBUG: Full status data: {status_data}")
                 
                 if status == 'FINISHED':
                     print("✅ Container processing finished!")
                     break
                 elif status == 'ERROR':
-                    return UploadResult("instagram", False, error="Container processing failed")
+                    error_details = status_data.get('error', {})
+                    error_msg = error_details.get('message', 'Unknown error')
+                    error_code = error_details.get('code', 'Unknown code')
+                    error_type = error_details.get('type', 'Unknown type')
+                    print(f"❌ Instagram container error: {error_type} - {error_msg} (Code: {error_code})")
+                    print(f"🔍 DEBUG: Full error response: {error_details}")
+                    return UploadResult("instagram", False, error=f"Container processing failed: {error_type} - {error_msg}")
                 elif status == 'EXPIRED':
                     return UploadResult("instagram", False, error="Container expired")
                 elif status == 'IN_PROGRESS':
                     print("⏳ Container still processing, waiting 10 seconds...")
                     time.sleep(10)  # Wait 10 seconds
                 else:
-                    return UploadResult("instagram", False, error=f"Unknown container status: {status}")
+                    print(f"⚠️  Unknown container status: {status}")
+                    print(f"🔍 DEBUG: Full status response: {status_data}")
+                    # Don't fail immediately for unknown status, wait a bit more
+                    if attempt < max_attempts - 1:
+                        print("⏳ Waiting 10 seconds before retry...")
+                        time.sleep(10)
+                    else:
+                        return UploadResult("instagram", False, error=f"Unknown container status: {status}")
             else:
                 return UploadResult("instagram", False, error="Container processing timeout")
             

@@ -7,7 +7,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, Any
 import webbrowser
 import time
-from .ngrok_manager import NgrokManager
+from managers.ngrok_manager import NgrokManager
 
 class OAuthCallbackHandler(BaseHTTPRequestHandler):
     """HTTP handler for OAuth callbacks."""

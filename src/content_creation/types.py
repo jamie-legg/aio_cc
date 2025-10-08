@@ -74,16 +74,19 @@ class FTPUploader:
                 s3_key
             )
             
-            # Generate public URL (use HTTPS for public access)
-            # Extract domain from endpoint URL for public access
-            if self.endpoint_url.startswith("http://"):
+            # Generate public URL
+            # For MinIO, we need to use the correct public URL format
+            # The FTP server is at http://ftp.syn.gl:9000 but public access might be different
+            if self.endpoint_url.startswith("http://ftp.syn.gl:9000"):
+                # Use the public domain without port for public access
+                public_url = f"https://ftp.syn.gl/{self.bucket_name}/{s3_key}"
+            elif self.endpoint_url.startswith("http://"):
                 public_domain = self.endpoint_url.replace("http://", "https://")
+                public_url = f"{public_domain}/{self.bucket_name}/{s3_key}"
             elif self.endpoint_url.startswith("https://"):
-                public_domain = self.endpoint_url
+                public_url = f"{self.endpoint_url}/{self.bucket_name}/{s3_key}"
             else:
-                public_domain = f"https://{self.endpoint_url}"
-            
-            public_url = f"{public_domain}/{self.bucket_name}/{s3_key}"
+                public_url = f"https://{self.endpoint_url}/{self.bucket_name}/{s3_key}"
             print(f"✅ Video uploaded to FTP: {public_url}")
             
             return public_url

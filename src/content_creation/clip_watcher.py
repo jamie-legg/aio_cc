@@ -7,10 +7,10 @@ from datetime import datetime
 import subprocess
 from dotenv import load_dotenv
 
-from .oauth_manager import OAuthManager
-from .upload_manager import UploadManager
-from .config_manager import ConfigManager
-from .ai_manager import AIManager
+from managers.oauth_manager import OAuthManager
+from managers.upload_manager import UploadManager
+from managers.config_manager import ConfigManager
+from managers.ai_manager import AIManager
 from .video_processor import VideoProcessor
 
 # Load environment variables
@@ -203,6 +203,18 @@ def watch_folder():
 
 def main():
     """Main entry point for the clip watcher."""
+    
+    # check for authentication
+    if not oauth_manager.is_authenticated("instagram"):
+        print("❌ Instagram not authenticated. Run 'uv run content-cli auth instagram' to authenticate.")
+        return
+    if not oauth_manager.is_authenticated("youtube"):
+        print("❌ YouTube not authenticated. Run 'uv run content-cli auth youtube' to authenticate.")
+        return
+    if not oauth_manager.is_authenticated("tiktok"):
+        print("❌ TikTok not authenticated. Run 'uv run content-cli auth tiktok' to authenticate.")
+        return
+    
     watch_folder()
 
 if __name__ == "__main__":

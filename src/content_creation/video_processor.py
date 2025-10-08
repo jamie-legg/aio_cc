@@ -186,14 +186,24 @@ class VideoProcessor:
                 if audio_filters:
                     cmd.extend(['-af', ','.join(audio_filters)])
             
-            # Output settings
+            # Output settings optimized for Instagram Reels (per Facebook docs)
             cmd.extend([
                 '-c:v', 'libx264',
-                '-preset', 'fast',
-                '-crf', '23',
+                '-preset', 'medium',  # Better quality than 'fast'
+                '-crf', '20',  # Better quality than 23
+                '-maxrate', '4M',  # Max bitrate 4Mbps for Instagram
+                '-bufsize', '8M',  # Buffer size
+                '-r', '30',  # Force 30fps for Instagram (within 24-60 range)
                 '-c:a', 'aac',
-                '-b:a', '128k',
+                '-b:a', '128k',  # Audio bitrate 128kbs+ (per specs)
+                '-ar', '48000',  # Sample rate 48kHz (per specs)
+                '-ac', '2',  # Stereo channels (per specs)
+                '-profile:a', 'aac_low',  # AAC Low Complexity (per specs)
                 '-movflags', '+faststart',
+                '-pix_fmt', 'yuv420p',  # Chroma subsampling 4:2:0 (per specs)
+                '-g', '60',  # Closed GOP 2-5 seconds (30fps * 2s = 60 frames)
+                '-keyint_min', '60',  # Minimum keyframe interval
+                '-sc_threshold', '0',  # Disable scene change detection for fixed frame rate
                 '-y',  # Overwrite output file
                 str(output_path)
             ])
@@ -214,7 +224,7 @@ class VideoProcessor:
         return self._convert_to_9_16_with_audio(input_path, output_path, target_width, target_height)
     
     def get_video_info(self, video_path: Path) -> dict:
-        """Get detailed video information."""
+        """Get detailed video information including audio details for Instagram compliance."""
         try:
             cmd = [
                 'ffprobe',
@@ -229,24 +239,62 @@ class VideoProcessor:
             import json
             data = json.loads(result.stdout)
             
-            # Extract video stream info
+            # Extract video and audio stream info
             video_stream = None
+            audio_stream = None
+            
             for stream in data['streams']:
-                if stream['codec_type'] == 'video':
+                if stream['codec_type'] == 'video' and video_stream is None:
                     video_stream = stream
-                    break
+                elif stream['codec_type'] == 'audio' and audio_stream is None:
+                    audio_stream = stream
             
             if not video_stream:
                 raise ValueError("No video stream found")
+            
+            # Calculate FPS safely
+            fps = 30  # Default
+            if 'r_frame_rate' in video_stream:
+                fps_str = video_stream['r_frame_rate']
+                if '/' in fps_str:
+                    try:
+                        num, den = fps_str.split('/')
+                        fps = float(num) / float(den) if float(den) != 0 else 30
+                    except (ValueError, ZeroDivisionError):
+                        fps = 30
+                else:
+                    try:
+                        fps = float(fps_str)
+                    except ValueError:
+                        fps = 30
+            
+            # Extract audio info if available
+            audio_codec = 'unknown'
+            audio_bitrate = 0
+            sample_rate = 0
+            channels = 0
+            
+            if audio_stream:
+                audio_codec = audio_stream.get('codec_name', 'unknown')
+                if 'bit_rate' in audio_stream:
+                    audio_bitrate = int(audio_stream['bit_rate'])
+                if 'sample_rate' in audio_stream:
+                    sample_rate = int(audio_stream['sample_rate'])
+                if 'channels' in audio_stream:
+                    channels = int(audio_stream['channels'])
             
             return {
                 'width': int(video_stream['width']),
                 'height': int(video_stream['height']),
                 'duration': float(video_stream.get('duration', 0)),
-                'fps': eval(video_stream.get('r_frame_rate', '0/1')),
+                'fps': fps,
                 'codec': video_stream.get('codec_name', 'unknown'),
                 'bitrate': int(video_stream.get('bit_rate', 0)),
-                'file_size': os.path.getsize(video_path)
+                'file_size': os.path.getsize(video_path),
+                'audio_codec': audio_codec,
+                'audio_bitrate': audio_bitrate,
+                'sample_rate': sample_rate,
+                'channels': channels
             }
             
         except Exception as e:
@@ -280,6 +328,107 @@ class VideoProcessor:
         }
         
         return requirements
+    
+    def check_instagram_requirements(self, video_path: Path) -> dict[str, any]:
+        """Check if video meets Instagram Reels requirements (per Facebook docs)."""
+        try:
+            info = self.get_video_info(video_path)
+            duration = info['duration']
+            width = info['width']
+            height = info['height']
+            codec = info['codec']
+            bitrate = info['bitrate']
+            file_size = info['file_size']
+            fps = info.get('fps', 30)
+            audio_codec = info.get('audio_codec', 'unknown')
+            audio_bitrate = info.get('audio_bitrate', 0)
+            sample_rate = info.get('sample_rate', 0)
+            channels = info.get('channels', 0)
+            
+            # Instagram Reels requirements (per Facebook docs)
+            max_duration = 90  # 90 seconds max
+            min_duration = 3   # 3 seconds min
+            max_file_size = 100 * 1024 * 1024  # 100MB max (conservative)
+            max_bitrate = 5 * 1024 * 1024  # 5Mbps max (conservative)
+            
+            # Resolution requirements (per Facebook docs)
+            min_width = 540   # Minimum 540x960
+            min_height = 960
+            recommended_width = 1080  # Recommended 1080x1920
+            recommended_height = 1920
+            
+            # Frame rate requirements (per Facebook docs)
+            min_fps = 24
+            max_fps = 60
+            
+            # Audio requirements (per Facebook docs)
+            min_audio_bitrate = 128 * 1000  # 128kbs+
+            required_sample_rate = 48000  # 48kHz
+            required_channels = 2  # Stereo
+            required_audio_codec = 'aac'  # AAC Low Complexity
+            
+            issues = []
+            
+            # Duration checks
+            if duration < min_duration:
+                issues.append(f"Too short ({duration:.1f}s < {min_duration}s)")
+            elif duration > max_duration:
+                issues.append(f"Too long ({duration:.1f}s > {max_duration}s)")
+            
+            # File size checks
+            if file_size > max_file_size:
+                issues.append(f"File too large ({file_size / (1024*1024):.1f}MB > {max_file_size / (1024*1024)}MB)")
+            
+            # Video bitrate checks
+            if bitrate > max_bitrate:
+                issues.append(f"Video bitrate too high ({bitrate / (1024*1024):.1f}Mbps > {max_bitrate / (1024*1024)}Mbps)")
+            
+            # Resolution checks
+            if width < min_width or height < min_height:
+                issues.append(f"Resolution too low ({width}x{height} < {min_width}x{min_height})")
+            elif width > recommended_width or height > recommended_height:
+                issues.append(f"Resolution higher than recommended ({width}x{height} > {recommended_width}x{recommended_height})")
+            
+            # Frame rate checks
+            if fps < min_fps or fps > max_fps:
+                issues.append(f"Frame rate out of range ({fps}fps not in {min_fps}-{max_fps}fps)")
+            
+            # Video codec checks
+            if codec not in ['h264', 'h265']:
+                issues.append(f"Unsupported video codec ({codec}, need h264/h265)")
+            
+            # Audio checks
+            if audio_codec != required_audio_codec:
+                issues.append(f"Wrong audio codec ({audio_codec} != {required_audio_codec})")
+            
+            if audio_bitrate > 0 and audio_bitrate < min_audio_bitrate:
+                issues.append(f"Audio bitrate too low ({audio_bitrate/1000:.0f}kbps < {min_audio_bitrate/1000}kbps)")
+            
+            if sample_rate > 0 and sample_rate != required_sample_rate:
+                issues.append(f"Wrong sample rate ({sample_rate}Hz != {required_sample_rate}Hz)")
+            
+            if channels > 0 and channels != required_channels:
+                issues.append(f"Wrong audio channels ({channels} != {required_channels} stereo)")
+            
+            return {
+                'duration': duration,
+                'width': width,
+                'height': height,
+                'codec': codec,
+                'bitrate': bitrate,
+                'file_size': file_size,
+                'fps': fps,
+                'audio_codec': audio_codec,
+                'audio_bitrate': audio_bitrate,
+                'sample_rate': sample_rate,
+                'channels': channels,
+                'issues': issues,
+                'compliant': len(issues) == 0
+            }
+            
+        except Exception as e:
+            print(f"Error checking Instagram requirements: {e}")
+            return {'compliant': False, 'issues': [f"Error: {e}"]}
     
     def find_audio_track(self, video_path: Path, audio_dir: Optional[Path] = None) -> Optional[Path]:
         """

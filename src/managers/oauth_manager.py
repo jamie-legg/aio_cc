@@ -12,7 +12,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from dotenv import load_dotenv
-from .callback_server import handle_oauth_flow
+from content_creation.callback_server import handle_oauth_flow
 
 load_dotenv()
 
@@ -83,7 +83,7 @@ class OAuthManager:
         print("Note: This requires a Facebook Page connected to an Instagram Business Account")
         
         # Start callback server first to get the redirect URI
-        from .callback_server import OAuthCallbackServer
+        from content_creation.callback_server import OAuthCallbackServer
         # Use reserved ngrok domain for consistent URLs
         ngrok_domain = os.getenv("NGROK_DOMAIN", "uninclinable-ontogenetic-leoma.ngrok-free.dev")
         temp_server = OAuthCallbackServer(use_ngrok=True, ngrok_domain=ngrok_domain)
@@ -215,7 +215,7 @@ class OAuthManager:
         print("Starting TikTok authentication...")
         
         # Start callback server first to get the redirect URI
-        from .callback_server import OAuthCallbackServer
+        from content_creation.callback_server import OAuthCallbackServer
         # Use reserved ngrok domain for consistent URLs
         ngrok_domain = os.getenv("NGROK_DOMAIN", "uninclinable-ontogenetic-leoma.ngrok-free.dev")
         temp_server = OAuthCallbackServer(use_ngrok=True, ngrok_domain=ngrok_domain)

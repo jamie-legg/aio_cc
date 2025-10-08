@@ -13,8 +13,8 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
 
-from ..content_creation.oauth_manager import OAuthCredentials
-from ..content_creation.types import UploadResult
+from managers.oauth_manager import OAuthCredentials
+from content_creation.types import UploadResult
 
 # YouTube upload retry configuration
 MAX_RETRIES = 10
@@ -30,12 +30,29 @@ class YouTubeUploader:
         """Upload video to YouTube Shorts with retry logic."""
         try:
             # Create YouTube service with proper credentials
-            # We need to reconstruct the full credentials object
-            client_id = os.getenv("YOUTUBE_CLIENT_ID")
-            client_secret = os.getenv("YOUTUBE_CLIENT_SECRET")
+            # Try to get credentials from JSON file first, then fall back to env vars
+            client_id = None
+            client_secret = None
+            
+            # Try to load from JSON file
+            client_secrets_file = os.getenv("YOUTUBE_CLIENT_SECRETS_FILE")
+            if client_secrets_file and os.path.exists(client_secrets_file):
+                try:
+                    import json
+                    with open(client_secrets_file, 'r') as f:
+                        secrets = json.load(f)
+                        client_id = secrets.get('installed', {}).get('client_id')
+                        client_secret = secrets.get('installed', {}).get('client_secret')
+                except Exception as e:
+                    print(f"⚠️  Could not load YouTube credentials from JSON file: {e}")
+            
+            # Fall back to environment variables
+            if not client_id or not client_secret:
+                client_id = os.getenv("YOUTUBE_CLIENT_ID")
+                client_secret = os.getenv("YOUTUBE_CLIENT_SECRET")
             
             if not client_id or not client_secret:
-                raise ValueError("YouTube client credentials not found. Please set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET in your .env file")
+                raise ValueError("YouTube client credentials not found. Please set YOUTUBE_CLIENT_SECRETS_FILE in your .env file or set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET")
             
             credentials = Credentials(
                 token=creds.access_token,

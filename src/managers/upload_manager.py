@@ -4,8 +4,8 @@ from pathlib import Path
 from typing import Dict, List, Any
 
 from .oauth_manager import OAuthManager
-from .types import FTPUploader, UploadResult
-from ..platform_uploaders import InstagramUploader, YouTubeUploader, TikTokUploader
+from content_creation.types import FTPUploader, UploadResult
+from platform_uploaders import InstagramUploader, YouTubeUploader, TikTokUploader
 
 class UploadManager:
     """Manages video uploads to multiple social media platforms."""
