@@ -9,16 +9,17 @@ from dataclasses import dataclass, asdict
 @dataclass
 class Config:
     """Configuration settings for the content creation tool."""
-    watch_dir: str = str(Path.home() / "Movies")
-    processed_dir: str = str(Path.home() / "Movies" / "Processed")
+    watch_dir: str = str(Path.home() / "Videos" if os.name == 'nt' else Path.home() / "Movies")
+    processed_dir: str = str(Path.home() / "Videos" / "Processed" if os.name == 'nt' else Path.home() / "Movies" / "Processed")
     video_extensions: list = None
-    upload_to_instagram: bool = os.getenv("UPLOAD_TO_INSTAGRAM", True)
-    upload_to_youtube: bool = os.getenv("UPLOAD_TO_YOUTUBE", True)
-    upload_to_tiktok: bool = os.getenv("UPLOAD_TO_TIKTOK", True)
+    upload_to_instagram: bool = os.getenv("UPLOAD_TO_INSTAGRAM", "true").lower() in ("true", "1", "yes", "on")
+    upload_to_youtube: bool = os.getenv("UPLOAD_TO_YOUTUBE", "true").lower() in ("true", "1", "yes", "on")
+    upload_to_tiktok: bool = os.getenv("UPLOAD_TO_TIKTOK", "true").lower() in ("true", "1", "yes", "on")
     
     def __post_init__(self):
         if self.video_extensions is None:
-            self.video_extensions = [".mov", ".mp4", ".avi", ".mkv", ".wmv"]
+            # Include Windows-specific formats
+            self.video_extensions = [".mov", ".mp4", ".avi", ".mkv", ".webm", ".wmv", ".flv", ".m4v"]
 
 class ConfigManager:
     """Manages configuration settings for the content creation tool."""

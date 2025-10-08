@@ -185,12 +185,13 @@ def watch_folder():
         print("Use 'uv run content-cli config set-watch-dir <path>' to set a valid directory")
         return
     
-    seen = set(os.listdir(watch_dir))
+    # Use pathlib for better Windows compatibility
+    seen = set(f.name for f in watch_dir.iterdir() if f.is_file())
     extensions_str = ", ".join(current_config.video_extensions)
     print(f"Watching {watch_dir} for new {extensions_str} files...")
     
     while True:
-        current = set(os.listdir(watch_dir))
+        current = set(f.name for f in watch_dir.iterdir() if f.is_file())
         new_files = []
         for f in current - seen:
             if any(f.lower().endswith(ext) for ext in current_config.video_extensions):

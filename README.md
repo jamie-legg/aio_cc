@@ -30,6 +30,25 @@ Install the project dependencies:
 uv sync
 ```
 
+### Windows Quick Setup
+
+For Windows users, we provide automated setup scripts:
+
+```cmd
+# Run the batch file (Command Prompt)
+setup_windows.bat
+
+# Or run the PowerShell script
+powershell -ExecutionPolicy Bypass -File setup_windows.ps1
+```
+
+These scripts will:
+- Check for Python and install `uv` if needed
+- Install all project dependencies
+- Verify FFmpeg installation
+- Create `.env` file from template
+- Set up default directories
+
 Install FFmpeg for video processing:
 
 ```bash
@@ -41,13 +60,29 @@ sudo apt update && sudo apt install ffmpeg
 
 # Windows (using Chocolatey)
 choco install ffmpeg
+
+# Windows (using winget)
+winget install ffmpeg
+
+# Windows (manual installation)
+# 1. Download FFmpeg from https://ffmpeg.org/download.html
+# 2. Extract to C:\ffmpeg
+# 3. Add C:\ffmpeg\bin to your PATH environment variable
 ```
 
 ## Setup
 
 1. Copy the environment template and configure your API keys:
    ```bash
+   # macOS/Linux
    cp env.example .env
+   
+   # Windows (Command Prompt)
+   copy env.example .env
+   
+   # Windows (PowerShell)
+   Copy-Item env.example .env
+   
    # Edit .env with your API credentials
    ```
 
@@ -93,9 +128,13 @@ choco install ffmpeg
 
 7. Configure your watch directory:
    ```bash
-   # Set where to watch for new videos
+   # macOS/Linux
    uv run content-cli config set-watch-dir ~/Movies
    uv run content-cli config set-processed-dir ~/Movies/Processed
+   
+   # Windows
+   uv run content-cli config set-watch-dir C:\Users\%USERNAME%\Videos
+   uv run content-cli config set-processed-dir C:\Users\%USERNAME%\Videos\Processed
    ```
 
 ## Usage
@@ -333,6 +372,14 @@ The system automatically looks for audio tracks in the following order:
 - Verify FTP credentials in `.env`
 - Check that the FTP server is accessible
 - Ensure the bucket exists and has proper permissions
+
+### Windows-Specific Issues
+- **Path issues**: Use forward slashes (/) or raw strings (r"C:\path") in Python
+- **FFmpeg not found**: Ensure FFmpeg is in your PATH or use full path to ffmpeg.exe
+- **Permission errors**: Run Command Prompt as Administrator if needed
+- **File watching**: The tool uses pathlib for better Windows compatibility
+- **Environment variables**: Use `set` command in Command Prompt or `$env:` in PowerShell
+- **Long paths**: Enable long path support in Windows 10/11 if you encounter path length issues
 
 ## Security
 
