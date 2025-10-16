@@ -8,6 +8,13 @@ from dataclasses import dataclass
 import boto3
 from botocore.exceptions import ClientError
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 
 @dataclass
 class UploadResult:
@@ -44,6 +51,12 @@ class FTPUploader:
                 signature_version='s3v4',
                 s3={
                     'addressing_style': 'path'
+                },
+                read_timeout=300,  # 5 minutes
+                connect_timeout=60,  # 1 minute
+                retries={
+                    'max_attempts': 3,
+                    'mode': 'adaptive'
                 }
             )
         )
@@ -61,10 +74,10 @@ class FTPUploader:
             # Test connection first
             try:
                 self.s3_client.head_bucket(Bucket=self.bucket_name)
-                print("✅ FTP connection successful")
+                print("[SUCCESS] FTP connection successful")
             except ClientError as e:
-                print(f"❌ FTP connection failed: {e}")
-                print(f"🔍 DEBUG: Error code: {e.response.get('Error', {}).get('Code', 'Unknown')}")
+                print(f"[ERROR] FTP connection failed: {e}")
+                print(f"[DEBUG] Error code: {e.response.get('Error', {}).get('Code', 'Unknown')}")
                 return None
             
             # Upload file
@@ -87,13 +100,84 @@ class FTPUploader:
                 public_url = f"{self.endpoint_url}/{self.bucket_name}/{s3_key}"
             else:
                 public_url = f"https://{self.endpoint_url}/{self.bucket_name}/{s3_key}"
-            print(f"✅ Video uploaded to FTP: {public_url}")
+            print(f"[SUCCESS] Video uploaded to FTP: {public_url}")
             
             return public_url
             
         except ClientError as e:
-            print(f"❌ FTP upload failed: {e}")
+            error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+            error_message = str(e).encode('utf-8', errors='replace').decode('utf-8')
+            
+            if error_code == 'XMinioStorageFull':
+                print(f"[ERROR] FTP upload failed: MinIO storage is full!")
+                print(f"[CLEANUP] Attempting automatic cleanup...")
+                
+                # Try automatic cleanup
+                try:
+                    from managers.minio_cleanup import MinIOCleanup
+                    from managers.config_manager import ConfigManager
+                    
+                    # Get cleanup configuration
+                    config_manager = ConfigManager()
+                    config = config_manager.get_config()
+                    
+                    if not config.auto_cleanup_enabled:
+                        print(f"[ERROR] Auto-cleanup is disabled in configuration")
+                        print(f"[ERROR] Please manually delete old files from your MinIO bucket")
+                        print(f"[ERROR] Access your MinIO console at: {self.endpoint_url}")
+                        print(f"[ERROR] Bucket: {self.bucket_name}")
+                        return None
+                    
+                    cleanup = MinIOCleanup()
+                    
+                    # Emergency cleanup using configured target
+                    result = cleanup.emergency_cleanup(target_free_mb=config.emergency_cleanup_target_mb)
+                    
+                    if result['freed_mb'] > 0:
+                        print(f"[SUCCESS] Cleanup freed {result['freed_mb']:.1f}MB, retrying upload...")
+                        
+                        # Retry the upload
+                        try:
+                            self.s3_client.upload_file(
+                                str(video_path),
+                                self.bucket_name,
+                                s3_key
+                            )
+                            
+                            # Generate public URL
+                            if self.endpoint_url.startswith("http://ftp.syn.gl:9000"):
+                                public_url = f"https://ftp.syn.gl/{self.bucket_name}/{s3_key}"
+                            elif self.endpoint_url.startswith("http://"):
+                                public_domain = self.endpoint_url.replace("http://", "https://")
+                                public_url = f"{public_domain}/{self.bucket_name}/{s3_key}"
+                            elif self.endpoint_url.startswith("https://"):
+                                public_url = f"{self.endpoint_url}/{self.bucket_name}/{s3_key}"
+                            else:
+                                public_url = f"https://{self.endpoint_url}/{self.bucket_name}/{s3_key}"
+                            
+                            print(f"[SUCCESS] Video uploaded to FTP after cleanup: {public_url}")
+                            return public_url
+                            
+                        except ClientError as retry_error:
+                            print(f"[ERROR] Upload still failed after cleanup: {retry_error}")
+                            print(f"[ERROR] Please manually clean up more space or check MinIO console")
+                            print(f"[ERROR] Access your MinIO console at: {self.endpoint_url}")
+                            print(f"[ERROR] Bucket: {self.bucket_name}")
+                    else:
+                        print(f"[ERROR] Cleanup failed to free space")
+                        print(f"[ERROR] Please manually delete old files from your MinIO bucket")
+                        print(f"[ERROR] Access your MinIO console at: {self.endpoint_url}")
+                        print(f"[ERROR] Bucket: {self.bucket_name}")
+                        
+                except Exception as cleanup_error:
+                    print(f"[ERROR] Automatic cleanup failed: {cleanup_error}")
+                    print(f"[ERROR] Please manually delete old files from your MinIO bucket")
+                    print(f"[ERROR] Access your MinIO console at: {self.endpoint_url}")
+                    print(f"[ERROR] Bucket: {self.bucket_name}")
+            else:
+                print(f"[ERROR] FTP upload failed: {error_code} - {error_message}")
             return None
         except Exception as e:
-            print(f"❌ FTP upload error: {e}")
+            error_message = str(e).encode('utf-8', errors='replace').decode('utf-8')
+            print(f"[ERROR] FTP upload error: {error_message}")
             return None

@@ -35,17 +35,35 @@ class ConfigManager:
         self.config = self._load_config()
     
     def _load_config(self) -> Config:
-        """Load configuration from file or create default."""
-        if not self.config_file.exists():
-            return Config()
+        """Load configuration from file or create default, with env vars taking priority."""
+        # Start with default config (which reads env vars)
+        config = Config()
         
-        try:
-            with open(self.config_file, 'r') as f:
-                data = json.load(f)
-                return Config(**data)
-        except Exception as e:
-            print(f"Error loading config: {e}")
-            return Config()
+        # Load from file if it exists
+        if self.config_file.exists():
+            try:
+                with open(self.config_file, 'r') as f:
+                    file_data = json.load(f)
+                
+                # Only override values that are NOT set via environment variables
+                if not os.getenv("UPLOAD_TO_INSTAGRAM"):
+                    config.upload_to_instagram = file_data.get("upload_to_instagram", config.upload_to_instagram)
+                if not os.getenv("UPLOAD_TO_YOUTUBE"):
+                    config.upload_to_youtube = file_data.get("upload_to_youtube", config.upload_to_youtube)
+                if not os.getenv("UPLOAD_TO_TIKTOK"):
+                    config.upload_to_tiktok = file_data.get("upload_to_tiktok", config.upload_to_tiktok)
+                if not os.getenv("WATCH_DIR"):
+                    config.watch_dir = file_data.get("watch_dir", config.watch_dir)
+                if not os.getenv("PROCESSED_DIR"):
+                    config.processed_dir = file_data.get("processed_dir", config.processed_dir)
+                if not os.getenv("VIDEO_EXTENSIONS"):
+                    config.video_extensions = file_data.get("video_extensions", config.video_extensions)
+                    
+            except Exception as e:
+                print(f"Error loading config: {e}")
+                # Keep the default config with env vars
+        
+        return config
     
     def _save_config(self):
         """Save configuration to file."""
@@ -167,8 +185,8 @@ class ConfigManager:
         processed_path = Path(self.config.processed_dir)
         
         print(f"\n=== Directory Status ===")
-        print(f"Watch Directory: {'✅ Exists' if watch_path.exists() else '❌ Not found'}")
-        print(f"Processed Directory: {'✅ Exists' if processed_path.exists() else '❌ Not found'}")
+        print(f"Watch Directory: {'[EXISTS]' if watch_path.exists() else '[NOT FOUND]'}")
+        print(f"Processed Directory: {'[EXISTS]' if processed_path.exists() else '[NOT FOUND]'}")
         
         if watch_path.exists():
             # Count video files in watch directory
@@ -208,8 +226,8 @@ class ConfigManager:
         if errors:
             print("Configuration validation failed:")
             for error in errors:
-                print(f"  ❌ {error}")
+                print(f"  [ERROR] {error}")
             return False
         
-        print("✅ Configuration is valid")
+        print("[SUCCESS] Configuration is valid")
         return True
