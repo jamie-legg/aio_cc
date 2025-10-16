@@ -1,82 +1,22 @@
-"""AI Manager for generating social media metadata using OpenAI."""
+"""AI enrichment service using OpenAI."""
 
 import json
-import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from openai import OpenAI
-from dotenv import load_dotenv
-from .api_client import APIClient
-from .config_manager import ConfigManager
+from ..config import settings
 
-load_dotenv()
 
-class AIManager:
-    """Manages AI-powered content generation for social media metadata."""
+class AIService:
+    """Handle AI-powered metadata generation."""
     
-    def __init__(self, config_manager: Optional[ConfigManager] = None):
-        """
-        Initialize the AI manager.
-        
-        Args:
-            config_manager: Optional config manager instance
-        """
-        self.config_manager = config_manager or ConfigManager()
-        config = self.config_manager.get_config()
-        
-        # Initialize OpenAI client for local fallback
-        self.client = OpenAI()
-        self.model = "gpt-4o-mini"  # Using gpt-4o-mini
-        
-        # Initialize backend API client if configured
-        self.api_client = None
-        if config.use_backend_api and config.api_key:
-            try:
-                self.api_client = APIClient(config.api_key, config.backend_api_url)
-                # Test connection
-                if self.api_client.test_connection():
-                    print("✅ Connected to backend API")
-                else:
-                    print("⚠️  Backend API unreachable, will use local mode")
-                    self.api_client = None
-            except Exception as e:
-                print(f"⚠️  Failed to initialize backend API client: {e}")
-                self.api_client = None
+    def __init__(self):
+        """Initialize OpenAI client."""
+        self.client = OpenAI(api_key=settings.openai_api_key)
+        self.model = "gpt-4o-mini"
     
     def generate_metadata(self, filename: str, game_context: str = "gaming") -> Dict[str, Any]:
         """
         Generate social media metadata for a video file.
-        
-        Uses backend API if available, falls back to local OpenAI.
-        
-        Args:
-            filename: Name of the video file
-            game_context: Context about the game being played
-            
-        Returns:
-            Dictionary containing title, caption, and hashtags
-        """
-        # Try backend API first if available
-        if self.api_client:
-            try:
-                print("🔗 Using backend API for AI enrichment...")
-                metadata = self.api_client.generate_metadata(filename, game_context)
-                
-                print(f"🤖 AI generated metadata for {filename}")
-                print(f"   Title: {metadata.get('title', 'N/A')}")
-                print(f"   Caption: {metadata.get('caption', 'N/A')[:50]}...")
-                print(f"   Hashtags: {metadata.get('hashtags', 'N/A')}")
-                
-                return metadata
-                
-            except Exception as e:
-                print(f"⚠️  Backend API failed, falling back to local OpenAI: {e}")
-        
-        # Fallback to local OpenAI
-        return self._generate_metadata_local(filename, game_context)
-    
-    def _generate_metadata_local(self, filename: str, game_context: str = "gaming") -> Dict[str, Any]:
-        """
-        Generate metadata using local OpenAI client.
         
         Args:
             filename: Name of the video file
@@ -86,12 +26,8 @@ class AIManager:
             Dictionary containing title, caption, and hashtags
         """
         try:
-            print("🏠 Using local OpenAI for AI enrichment...")
-            
-            # Create the prompt based on game context
             prompt = self._create_prompt(filename, game_context)
             
-            # Generate metadata using OpenAI
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -139,26 +75,18 @@ class AIManager:
                 max_tokens=500
             )
             
-            # Parse the response
             content = response.choices[0].message.content
             metadata = json.loads(content)
             
-            # Convert hashtags array to string for compatibility with existing code
+            # Convert hashtags array to string for compatibility
             if isinstance(metadata.get('hashtags'), list):
                 metadata['hashtags'] = ' '.join(metadata['hashtags'])
-            
-            print(f"🤖 AI generated metadata for {filename}")
-            print(f"   Title: {metadata.get('title', 'N/A')}")
-            print(f"   Caption: {metadata.get('caption', 'N/A')[:50]}...")
-            print(f"   Hashtags: {metadata.get('hashtags', 'N/A')}")
             
             return metadata
             
         except json.JSONDecodeError as e:
-            print(f"❌ Failed to parse AI response as JSON: {e}")
             return self._get_fallback_metadata(filename)
         except Exception as e:
-            print(f"❌ AI generation failed: {e}")
             return self._get_fallback_metadata(filename)
     
     def _create_prompt(self, filename: str, game_context: str) -> str:
@@ -193,22 +121,4 @@ Output JSON with keys: title, caption, hashtags."""
             "caption": "check out this insane play! we totally owned them 💀🥀",
             "hashtags": "#gaming #shorts #epic #clutch"
         }
-    
-    def generate_metadata_for_game(self, filename: str, game_name: str) -> Dict[str, Any]:
-        """Generate metadata with specific game context."""
-        return self.generate_metadata(filename, game_name)
-    
-    def check_quota(self) -> Optional[Dict[str, Any]]:
-        """
-        Check user's quota status (backend API only).
-        
-        Returns:
-            Quota information dictionary or None if not using backend
-        """
-        if self.api_client:
-            try:
-                return self.api_client.check_quota()
-            except Exception as e:
-                print(f"⚠️  Failed to check quota: {e}")
-                return None
-        return None
+

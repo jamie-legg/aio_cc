@@ -16,6 +16,11 @@ class Config:
     upload_to_youtube: bool = os.getenv("UPLOAD_TO_YOUTUBE", "true").lower() in ("true", "1", "yes", "on")
     upload_to_tiktok: bool = os.getenv("UPLOAD_TO_TIKTOK", "true").lower() in ("true", "1", "yes", "on")
     
+    # Backend API configuration
+    backend_api_url: str = os.getenv("BACKEND_API_URL", "http://localhost:8000")
+    api_key: str = os.getenv("CONTENT_CREATION_API_KEY", "")
+    use_backend_api: bool = os.getenv("USE_BACKEND_API", "false").lower() in ("true", "1", "yes", "on")
+    
     def __post_init__(self):
         if self.video_extensions is None:
             # Include Windows-specific formats
@@ -129,6 +134,22 @@ class ConfigManager:
             platforms.append("tiktok")
         return platforms
     
+    def set_backend_config(self, api_url: Optional[str] = None, api_key: Optional[str] = None, use_backend: Optional[bool] = None):
+        """Set backend API configuration."""
+        if api_url is not None:
+            self.config.backend_api_url = api_url
+        if api_key is not None:
+            self.config.api_key = api_key
+        if use_backend is not None:
+            self.config.use_backend_api = use_backend
+        
+        self._save_config()
+        print(f"Backend API configuration updated")
+        print(f"  API URL: {self.config.backend_api_url}")
+        print(f"  API Key: {'***' + self.config.api_key[-8:] if len(self.config.api_key) > 8 else 'Not set'}")
+        print(f"  Use Backend: {self.config.use_backend_api}")
+        return True
+    
     def show_config(self):
         """Display current configuration."""
         print("=== Content Creation Configuration ===")
@@ -136,6 +157,10 @@ class ConfigManager:
         print(f"Processed Directory: {self.config.processed_dir}")
         print(f"Video Extensions: {', '.join(self.config.video_extensions)}")
         print(f"Upload Platforms: {', '.join(self.get_upload_platforms())}")
+        print(f"\n=== Backend API ===")
+        print(f"API URL: {self.config.backend_api_url}")
+        print(f"API Key: {'***' + self.config.api_key[-8:] if len(self.config.api_key) > 8 else 'Not set'}")
+        print(f"Use Backend API: {'✅ Yes' if self.config.use_backend_api else '❌ No (local mode)'}")
         
         # Check if directories exist
         watch_path = Path(self.config.watch_dir)

@@ -5,20 +5,27 @@ description = "AI-powered video clip processor that watches for new video files 
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "aiohttp>=3.8.0",
     "boto3>=1.40.46",
+    "fastapi>=0.104.0",
     "google-api-python-client>=2.184.0",
     "google-auth>=2.41.1",
     "google-auth-httplib2>=0.2.0",
     "google-auth-oauthlib>=1.2.2",
-    "openai>=2.1.0",
+    "openai>=1.50.0",
     "pyngrok>=7.4.0",
     "python-dotenv>=1.1.1",
     "requests>=2.32.5",
+    "uvicorn>=0.24.0",
 ]
 
 [project.scripts]
 clip-watcher = "content_creation.clip_watcher:main"
 content-cli = "content_creation.cli:main"
+content-gui = "ui.main_window:main"
+analytics-server = "scripts.analytics.start_analytics:main"
+collect-metrics = "scripts.analytics.collect_metrics:main"
+sync-channels = "scripts.analytics.sync_channels:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

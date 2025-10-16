@@ -1,16 +1,18 @@
 """Upload manager for posting videos to social media platforms."""
 
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 from .oauth_manager import OAuthManager
+from .config_manager import ConfigManager
+from .api_client import APIClient
 from content_creation.types import FTPUploader, UploadResult
 from platform_uploaders import InstagramUploader, YouTubeUploader, TikTokUploader
 
 class UploadManager:
     """Manages video uploads to multiple social media platforms."""
     
-    def __init__(self, oauth_manager: OAuthManager):
+    def __init__(self, oauth_manager: OAuthManager, config_manager: Optional[ConfigManager] = None):
         self.oauth_manager = oauth_manager
         self.ftp_uploader = FTPUploader()
         
@@ -18,6 +20,16 @@ class UploadManager:
         self.instagram_uploader = InstagramUploader(self.ftp_uploader)
         self.youtube_uploader = YouTubeUploader()
         self.tiktok_uploader = TikTokUploader()
+        
+        # Initialize API client for analytics tracking
+        self.config_manager = config_manager or ConfigManager()
+        config = self.config_manager.get_config()
+        self.api_client = None
+        if config.use_backend_api and config.api_key:
+            try:
+                self.api_client = APIClient(config.api_key, config.backend_api_url)
+            except Exception as e:
+                print(f"⚠️  Failed to initialize API client for analytics: {e}")
     
     def upload_to_instagram(self, video_path: Path, metadata: Dict[str, str]) -> UploadResult:
         """Upload video to Instagram Reels using FTP server and video_url parameter."""
@@ -95,6 +107,21 @@ class UploadManager:
                     print(f"   URL: {result.url}")
             else:
                 print(f"❌ {platform.upper()}: Failed - {result.error}")
+            
+            # Track upload with backend API if available
+            if self.api_client:
+                try:
+                    self.api_client.track_upload(
+                        platform=platform,
+                        filename=video_path.name,
+                        video_id=result.video_id,
+                        video_url=result.url,
+                        metadata=validated_metadata,
+                        status="success" if result.success else "failed",
+                        error_message=result.error
+                    )
+                except Exception as e:
+                    print(f"⚠️  Failed to track upload to backend: {e}")
         
         return results
     

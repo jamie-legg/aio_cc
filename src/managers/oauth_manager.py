@@ -166,7 +166,11 @@ class OAuthManager:
             print("YouTube client secrets file not found. Please set YOUTUBE_CLIENT_SECRETS_FILE")
             return False
         
-        SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
+        SCOPES = [
+            'https://www.googleapis.com/auth/youtube.readonly',
+            'https://www.googleapis.com/auth/youtube.force-ssl',
+            'https://www.googleapis.com/auth/youtube.upload'
+        ]
         
         flow = InstalledAppFlow.from_client_secrets_file(
             client_secrets_file, SCOPES)
@@ -234,7 +238,7 @@ class OAuthManager:
             f"https://www.tiktok.com/v2/auth/authorize/"
             f"?client_key={client_key}"
             f"&response_type=code"
-            f"&scope=user.info.basic,video.publish,video.upload"
+            f"&scope=user.info.stats,video.list,video.publish,video.upload,user.info.profile"
             f"&redirect_uri={redirect_uri}"
             f"&state={state}"
             f"&disable_auto_auth=1"
@@ -268,9 +272,22 @@ class OAuthManager:
         
         try:
             response = requests.post(token_url, data=token_data)
-            response.raise_for_status()
+            
+            # Debug: Print response details
+            print(f"TikTok token response status: {response.status_code}")
+            print(f"TikTok token response headers: {dict(response.headers)}")
+            
+            if response.status_code != 200:
+                print(f"TikTok token exchange failed with status {response.status_code}")
+                try:
+                    error_data = response.json()
+                    print(f"Error details: {error_data}")
+                except:
+                    print(f"Error response text: {response.text}")
+                return False
             
             token_info = response.json()
+            print(f"TikTok token response: {token_info}")
             
             if token_info.get("error"):
                 print(f"TikTok authentication failed: {token_info['error']['message']}")
@@ -301,6 +318,17 @@ class OAuthManager:
         """Check if we have valid credentials for a platform."""
         creds = self.get_credentials(platform)
         return creds is not None and creds.access_token is not None
+    
+    def reset_platform_auth(self, platform: str) -> bool:
+        """Reset authentication for a specific platform."""
+        if platform in self.credentials:
+            del self.credentials[platform]
+            self._save_credentials()
+            print(f"[SUCCESS] {platform.upper()} authentication reset")
+            return True
+        else:
+            print(f"[INFO] {platform.upper()} was not authenticated")
+            return True
     
     def authenticate_all(self) -> Dict[str, bool]:
         """Authenticate with all platforms."""

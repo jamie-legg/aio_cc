@@ -514,3 +514,154 @@ class VideoProcessor:
                 return audio_file
         
         return None
+    
+    def add_outro_image(self, input_path: Path, outro_image: Path, 
+                       output_path: Optional[Path] = None, 
+                       outro_duration: float = 1.0) -> Path:
+        """
+        Add an image outro to the end of a video.
+        
+        Args:
+            input_path: Path to input video file
+            outro_image: Path to outro image (PNG/JPG)
+            output_path: Path for output file (optional)
+            outro_duration: Duration of outro in seconds (default: 1.0)
+            
+        Returns:
+            Path to processed video file with outro
+        """
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input video not found: {input_path}")
+        
+        if not outro_image.exists():
+            raise FileNotFoundError(f"Outro image not found: {outro_image}")
+        
+        if not self._is_supported_format(input_path):
+            raise ValueError(f"Unsupported video format: {input_path.suffix}")
+        
+        # Generate output path if not provided
+        if output_path is None:
+            output_path = input_path.parent / f"{input_path.stem}_with_outro{input_path.suffix}"
+        
+        print(f"🎬 Adding outro image to video: {input_path.name}")
+        print(f"🖼️  Outro image: {outro_image.name}")
+        print(f"⏱️  Outro duration: {outro_duration}s")
+        
+        try:
+            # Get video info to match dimensions and properties
+            video_info = self.get_video_info(input_path)
+            width = video_info['width']
+            height = video_info['height']
+            fps = video_info['fps']
+            
+            print(f"📏 Video dimensions: {width}x{height} @ {fps}fps")
+            
+            # Create temporary video from image
+            with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_video:
+                temp_video_path = Path(temp_video.name)
+            
+            try:
+                # Step 1: Convert image to video segment matching the video properties
+                print("📸 Converting image to video segment...")
+                self._create_video_from_image(outro_image, temp_video_path, width, height, 
+                                             fps, outro_duration)
+                
+                # Step 2: Concatenate original video with outro
+                print("🔗 Concatenating video with outro...")
+                self._concatenate_videos(input_path, temp_video_path, output_path)
+                
+                print(f"✅ Video with outro created successfully: {output_path.name}")
+                return output_path
+                
+            finally:
+                # Clean up temporary file
+                if temp_video_path.exists():
+                    temp_video_path.unlink()
+            
+        except Exception as e:
+            print(f"❌ Failed to add outro: {e}")
+            raise
+    
+    def _create_video_from_image(self, image_path: Path, output_path: Path, 
+                                 width: int, height: int, fps: float, 
+                                 duration: float):
+        """Create a video from a static image."""
+        try:
+            cmd = [
+                'ffmpeg',
+                '-loop', '1',  # Loop the image
+                '-i', str(image_path),
+                '-t', str(duration),  # Duration
+                '-vf', f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black',
+                '-c:v', 'libx264',
+                '-preset', 'medium',
+                '-crf', '20',
+                '-r', str(int(fps)),  # Match video fps
+                '-pix_fmt', 'yuv420p',
+                '-an',  # No audio for the outro segment
+                '-y',
+                str(output_path)
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            
+        except subprocess.CalledProcessError as e:
+            error_msg = e.stderr if e.stderr else "Unknown FFmpeg error"
+            raise RuntimeError(f"Failed to create video from image: {error_msg}")
+    
+    def _concatenate_videos(self, video1: Path, video2: Path, output_path: Path):
+        """Concatenate two videos together."""
+        try:
+            # Create a temporary file list for FFmpeg concat
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+                f.write(f"file '{video1.absolute()}'\n")
+                f.write(f"file '{video2.absolute()}'\n")
+                concat_file = Path(f.name)
+            
+            try:
+                cmd = [
+                    'ffmpeg',
+                    '-f', 'concat',
+                    '-safe', '0',
+                    '-i', str(concat_file),
+                    '-c', 'copy',  # Copy codecs for fast concatenation
+                    '-y',
+                    str(output_path)
+                ]
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                
+            finally:
+                # Clean up concat file
+                if concat_file.exists():
+                    concat_file.unlink()
+                
+        except subprocess.CalledProcessError as e:
+            # If copy codec fails (codec mismatch), re-encode
+            print("⚠️  Codec mismatch, re-encoding...")
+            self._concatenate_videos_reencode(video1, video2, output_path)
+    
+    def _concatenate_videos_reencode(self, video1: Path, video2: Path, output_path: Path):
+        """Concatenate two videos with re-encoding (slower but more compatible)."""
+        try:
+            cmd = [
+                'ffmpeg',
+                '-i', str(video1),
+                '-i', str(video2),
+                '-filter_complex', '[0:v][0:a][1:v][1:a]concat=n=2:v=1:a=1[outv][outa]',
+                '-map', '[outv]',
+                '-map', '[outa]',
+                '-c:v', 'libx264',
+                '-preset', 'medium',
+                '-crf', '20',
+                '-c:a', 'aac',
+                '-b:a', '128k',
+                '-y',
+                str(output_path)
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            
+        except subprocess.CalledProcessError as e:
+            error_msg = e.stderr if e.stderr else "Unknown FFmpeg error"
+            raise RuntimeError(f"Failed to concatenate videos: {error_msg}")
