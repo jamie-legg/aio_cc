@@ -70,11 +70,20 @@ def process_clip(path):
     processed_dir = Path(current_config.processed_dir)
     processed_dir.mkdir(exist_ok=True)
 
-    # Process video for Shorts if needed
+    # Check if we need to process for watermark/outro
+    assets_dir = Path("assets")
+    watermark_path = assets_dir / "syn_watermark.png"
+    outro_path = assets_dir / "outro.png"
+    has_assets = watermark_path.exists() or outro_path.exists()
+    
+    # Process video for Shorts if needed OR if we have assets to apply
     processed_video_path = None
-    if requirements.get('needs_processing', True):
+    if requirements.get('needs_processing', True) or has_assets:
         try:
-            print("🎬 Processing video for YouTube Shorts...")
+            if requirements.get('needs_processing', True):
+                print("🎬 Processing video for YouTube Shorts...")
+            else:
+                print("🎬 Processing video for watermark/outro...")
             
             # Look for audio track
             audio_track = video_processor.find_audio_track(path)
@@ -85,12 +94,14 @@ def process_clip(path):
             else:
                 print(f"🎵 Found matching audio track: {audio_track.name}")
             
-            # Process with audio and fade effects
+            # Process with audio, fade effects, watermark, and outro
             processed_video_path = video_processor.process_for_shorts(
                 path, 
                 processed_dir / f"{path.stem}_shorts{path.suffix}",
                 audio_track=audio_track,
-                fade_duration=1.0  # 1 second fade in/out
+                fade_duration=1.0,  # 1 second fade in/out
+                watermark_path=watermark_path if watermark_path.exists() else None,
+                outro_path=outro_path if outro_path.exists() else None
             )
             print(f"[SUCCESS] Video processed: {processed_video_path.name}")
         except Exception as e:

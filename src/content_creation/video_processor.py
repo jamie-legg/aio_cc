@@ -135,7 +135,8 @@ class VideoProcessor:
             raise
 
     def process_for_shorts(self, input_path: Path, output_path: Optional[Path] = None, 
-                          audio_track: Optional[Path] = None, fade_duration: float = 1.0) -> Path:
+                          audio_track: Optional[Path] = None, fade_duration: float = 1.0,
+                          watermark_path: Optional[Path] = None, outro_path: Optional[Path] = None) -> Path:
         """
         Process video for YouTube Shorts (9:16 aspect ratio) with optional audio and fade effects.
         
@@ -144,6 +145,8 @@ class VideoProcessor:
             output_path: Path for output file (optional, will generate if not provided)
             audio_track: Path to MP3 audio track to mix (optional)
             fade_duration: Duration of fade in/out in seconds (default: 1.0)
+            watermark_path: Path to watermark image (optional)
+            outro_path: Path to outro image (optional)
             
         Returns:
             Path to processed video file
@@ -161,6 +164,20 @@ class VideoProcessor:
         if audio_track and not audio_track.suffix.lower() in ['.mp3', '.wav', '.aac', '.m4a']:
             raise ValueError(f"Unsupported audio format: {audio_track.suffix}")
         
+        # Validate watermark if provided
+        if watermark_path and not watermark_path.exists():
+            raise FileNotFoundError(f"Watermark image not found: {watermark_path}")
+        
+        if watermark_path and not watermark_path.suffix.lower() in ['.png', '.jpg', '.jpeg']:
+            raise ValueError(f"Unsupported watermark format: {watermark_path.suffix}")
+        
+        # Validate outro if provided
+        if outro_path and not outro_path.exists():
+            raise FileNotFoundError(f"Outro image not found: {outro_path}")
+        
+        if outro_path and not outro_path.suffix.lower() in ['.png', '.jpg', '.jpeg']:
+            raise ValueError(f"Unsupported outro format: {outro_path.suffix}")
+        
         # Generate output path if not provided
         if output_path is None:
             output_path = input_path.parent / f"{input_path.stem}_shorts{input_path.suffix}"
@@ -171,6 +188,10 @@ class VideoProcessor:
             print(f"[AUDIO] Adding audio track: {audio_track.name}")
         if fade_duration > 0:
             print(f"[FADE] Adding fade in/out: {fade_duration}s")
+        if watermark_path:
+            print(f"[WATERMARK] Adding watermark: {watermark_path.name}")
+        if outro_path:
+            print(f"[OUTRO] Adding outro: {outro_path.name}")
         
         try:
             # Get video dimensions and duration
@@ -187,7 +208,7 @@ class VideoProcessor:
             
             # Process video with FFmpeg
             self._convert_to_9_16_with_audio(input_path, output_path, target_width, target_height, 
-                                           audio_track, fade_duration, duration)
+                                           audio_track, fade_duration, duration, watermark_path, outro_path)
             
             print(f"[SUCCESS] Video processed successfully: {output_path.name}")
             return output_path
@@ -262,11 +283,20 @@ class VideoProcessor:
     
     def _convert_to_9_16_with_audio(self, input_path: Path, output_path: Path, target_width: int, 
                                    target_height: int, audio_track: Optional[Path] = None, 
-                                   fade_duration: float = 1.0, video_duration: float = 0.0):
-        """Convert video to 9:16 with optional audio mixing and fade effects."""
+                                   fade_duration: float = 1.0, video_duration: float = 0.0,
+                                   watermark_path: Optional[Path] = None, outro_path: Optional[Path] = None):
+        """Convert video to 9:16 with optional audio mixing, fade effects, watermark, and outro."""
         try:
             # Build video filter
             video_filters = [f'scale={target_width}:{target_height}:force_original_aspect_ratio=increase,crop={target_width}:{target_height}']
+            
+            # Add watermark if provided
+            if watermark_path:
+                # Position watermark in bottom-right corner with some padding
+                padding = 20  # pixels from edge
+                watermark_x = target_width - 256 - padding  # 256 is watermark size
+                watermark_y = target_height - 256 - padding
+                # We'll add the watermark input and filter in the command building section
             
             # Add fade effects if requested
             if fade_duration > 0 and video_duration > 0:
@@ -287,51 +317,106 @@ class VideoProcessor:
             
             # Input files
             cmd.extend(['-i', str(input_path)])
+            if watermark_path:
+                cmd.extend(['-i', str(watermark_path)])
+            if outro_path:
+                cmd.extend(['-i', str(outro_path)])
             if audio_track:
                 cmd.extend(['-i', str(audio_track)])
             
-            # Video filters
-            cmd.extend(['-vf', ','.join(video_filters)])
+            # Build filter complex for all effects
+            filter_parts = []
+            
+            # Main video processing with watermark
+            if watermark_path:
+                padding = 20
+                watermark_x = target_width - 256 - padding
+                watermark_y = target_height - 256 - padding
+                # Input 1 is watermark
+                main_filter = f'[0:v]{",".join(video_filters)}[main];[1:v]scale=256:256[watermark];[main][watermark]overlay={watermark_x}:{watermark_y}[v_main]'
+            else:
+                main_filter = f'[0:v]{",".join(video_filters)}[v_main]'
+            
+            # Handle outro if provided
+            if outro_path:
+                # Input 1 is watermark, input 2 is outro
+                outro_input = 2 if watermark_path else 1
+                outro_filter = f'[{outro_input}:v]scale={target_width}:{target_height}:force_original_aspect_ratio=increase,crop={target_width}:{target_height},fps=60,trim=duration=1[outro]'
+                concat_filter = f'[v_main][outro]concat=n=2:v=1:a=0[v]'
+                filter_parts.extend([main_filter, outro_filter, concat_filter])
+            else:
+                filter_parts.append(main_filter.replace('[v_main]', '[v]'))
             
             # Audio processing
             if audio_track:
-                # Mix original audio with new track
+                # Audio input is last
+                audio_input = 1
+                if watermark_path:
+                    audio_input += 1
+                if outro_path:
+                    audio_input += 1
                 if audio_filters:
-                    cmd.extend(['-filter_complex', f'[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=2,{",".join(audio_filters)}[a]'])
-                    cmd.extend(['-map', '0:v', '-map', '[a]'])
+                    audio_filter = f'[0:a][{audio_input}:a]amix=inputs=2:duration=first:dropout_transition=2,{",".join(audio_filters)}[a]'
                 else:
-                    cmd.extend(['-filter_complex', '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=2[a]'])
-                    cmd.extend(['-map', '0:v', '-map', '[a]'])
+                    audio_filter = f'[0:a][{audio_input}:a]amix=inputs=2:duration=first:dropout_transition=2[a]'
+                filter_parts.append(audio_filter)
             else:
-                # Just apply audio fade to original audio
+                if audio_filters:
+                    filter_parts.append(f'[0:a]{",".join(audio_filters)}[a]')
+                else:
+                    filter_parts.append('[0:a]acopy[a]')
+            
+            # Apply filters
+            if watermark_path or outro_path or audio_track:
+                cmd.extend(['-filter_complex', ';'.join(filter_parts)])
+                cmd.extend(['-map', '[v]', '-map', '[a]'])
+                # Add output settings
+                cmd.extend([
+                    '-c:v', 'libx264',
+                    '-preset', 'fast',
+                    '-crf', '18',
+                    '-c:a', 'aac',
+                    '-b:a', '192k',
+                    '-ar', '48000',
+                    '-ac', '2',
+                    '-movflags', '+faststart',
+                    '-pix_fmt', 'yuv420p',
+                    '-y',  # Overwrite output file
+                    str(output_path)
+                ])
+                print(f"[FFMPEG] Running FFmpeg: {' '.join(cmd)}")
+            else:
+                # Simple case - no complex filters needed
+                cmd.extend(['-vf', ','.join(video_filters)])
                 if audio_filters:
                     cmd.extend(['-af', ','.join(audio_filters)])
+                print(f"[FFMPEG] Running FFmpeg: {' '.join(cmd)}")
+                
+                # Output settings optimized for high quality 60fps
+                cmd.extend([
+                    '-c:v', 'libx264',
+                    '-preset', 'slow',  # Best quality preset
+                    '-crf', '18',  # Higher quality (lower CRF = better quality)
+                    '-maxrate', '8M',  # High bitrate for 60fps
+                    '-bufsize', '16M',  # 2x bitrate buffer
+                    '-r', '60',  # Force 60fps for smooth video
+                    '-c:a', 'aac',
+                    '-b:a', '192k',  # High quality audio
+                    '-ar', '48000',  # Sample rate 48kHz (per specs)
+                    '-ac', '2',  # Stereo channels (per specs)
+                    '-profile:a', 'aac_low',  # AAC Low Complexity (per specs)
+                    '-movflags', '+faststart',
+                    '-pix_fmt', 'yuv420p',  # Chroma subsampling 4:2:0 (per specs)
+                    '-g', '120',  # Closed GOP 2-5 seconds (60fps * 2s = 120 frames)
+                    '-keyint_min', '120',  # Minimum keyframe interval
+                    '-sc_threshold', '0',  # Disable scene change detection for fixed frame rate
+                    '-y',  # Overwrite output file
+                    str(output_path)
+                ])
+                
+                print(f"[FFMPEG] Running FFmpeg: {' '.join(cmd)}")
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             
-            # Output settings optimized for high quality 60fps
-            cmd.extend([
-                '-c:v', 'libx264',
-                '-preset', 'slow',  # Best quality preset
-                '-crf', '18',  # Higher quality (lower CRF = better quality)
-                '-maxrate', '8M',  # High bitrate for 60fps
-                '-bufsize', '16M',  # 2x bitrate buffer
-                '-r', '60',  # Force 60fps for smooth video
-                '-c:a', 'aac',
-                '-b:a', '192k',  # High quality audio
-                '-ar', '48000',  # Sample rate 48kHz (per specs)
-                '-ac', '2',  # Stereo channels (per specs)
-                '-profile:a', 'aac_low',  # AAC Low Complexity (per specs)
-                '-movflags', '+faststart',
-                '-pix_fmt', 'yuv420p',  # Chroma subsampling 4:2:0 (per specs)
-                '-g', '120',  # Closed GOP 2-5 seconds (60fps * 2s = 120 frames)
-                '-keyint_min', '120',  # Minimum keyframe interval
-                '-sc_threshold', '0',  # Disable scene change detection for fixed frame rate
-                '-y',  # Overwrite output file
-                str(output_path)
-            ])
-            
-            print(f"[FFMPEG] Running FFmpeg: {' '.join(cmd)}")
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             print("[SUCCESS] FFmpeg conversion completed")
             
         except subprocess.CalledProcessError as e:
