@@ -42,8 +42,22 @@ def check_auth(args):
     
     print("=== Authentication Status ===")
     for platform in platforms:
-        if oauth_manager.is_authenticated(platform):
+        creds = oauth_manager.get_credentials(platform)
+        if creds and creds.access_token:
             print(f"[SUCCESS] {platform.upper()}: Authenticated")
+            
+            # Show token expiration info
+            if creds.expires_at:
+                import time
+                expires_in = creds.expires_at - int(time.time())
+                if expires_in > 0:
+                    hours = expires_in // 3600
+                    minutes = (expires_in % 3600) // 60
+                    print(f"   Token expires in: {hours}h {minutes}m")
+                else:
+                    print(f"   Token expired: {abs(expires_in)}s ago")
+            else:
+                print(f"   Token expiration: Unknown")
             
             # Get additional info
             status = upload_manager.get_upload_status(platform)
@@ -138,6 +152,136 @@ def config_validate(args):
     config_manager = ConfigManager()
     config_manager.validate_config()
 
+def retry_list(args):
+    """List all failed uploads available for retry."""
+    oauth_manager = OAuthManager()
+    upload_manager = UploadManager(oauth_manager)
+    
+    failed_uploads = upload_manager.list_failed_uploads()
+    
+    if not failed_uploads:
+        print("[INFO] No failed uploads found")
+        return
+    
+    print("=== Failed Uploads ===")
+    for key, entry in failed_uploads.items():
+        video_name = entry["video_path"].split("\\")[-1]
+        platform = entry["platform"]
+        error = entry["error"]
+        timestamp = entry["timestamp"]
+        retry_count = entry["retry_count"]
+        
+        print(f"\n{platform.upper()}: {video_name}")
+        print(f"  Error: {error}")
+        print(f"  Failed: {timestamp}")
+        print(f"  Retry count: {retry_count}")
+
+def retry_single(args):
+    """Retry a specific failed upload."""
+    oauth_manager = OAuthManager()
+    upload_manager = UploadManager(oauth_manager)
+    
+    result = upload_manager.retry_failed_upload(args.video_name, args.platform)
+    
+    if result.success:
+        print(f"[SUCCESS] {args.platform.upper()} retry successful!")
+        if result.url:
+            print(f"URL: {result.url}")
+    else:
+        print(f"[ERROR] {args.platform.upper()} retry failed: {result.error}")
+
+def retry_all(args):
+    """Retry all failed uploads for specified platforms."""
+    oauth_manager = OAuthManager()
+    upload_manager = UploadManager(oauth_manager)
+    
+    platforms = args.platforms.split(",") if args.platforms else None
+    results = upload_manager.retry_all_failed_uploads(platforms)
+    
+    print("\n=== Retry Results ===")
+    for key, result in results.items():
+        status = "[SUCCESS]" if result.success else "[FAILED]"
+        print(f"{key}: {status} {result.error if not result.success else 'Success'}")
+
+def retry_clear(args):
+    """Clear failed uploads."""
+    oauth_manager = OAuthManager()
+    upload_manager = UploadManager(oauth_manager)
+    
+    upload_manager.clear_failed_uploads(args.platform)
+    print(f"[CLEAR] Cleared failed uploads for {args.platform.upper() if args.platform else 'ALL'}")
+
+def upload_video(args):
+    """Upload video with AI-generated captions to all platforms."""
+    from pathlib import Path
+    from managers.ai_manager import AIManager
+    from managers.config_manager import ConfigManager
+    
+    video_path = Path(args.video)
+    if not video_path.exists():
+        print(f"[ERROR] Video file not found: {video_path}")
+        return
+    
+    print(f"[UPLOAD] Processing video: {video_path.name}")
+    
+    # Initialize managers
+    oauth_manager = OAuthManager()
+    upload_manager = UploadManager(oauth_manager)
+    ai_manager = AIManager()
+    config_manager = ConfigManager()
+    
+    # Check authentication
+    print("[AUTH] Checking authentication status...")
+    platforms = []
+    if oauth_manager.is_authenticated("instagram") and config_manager.get_config().upload_to_instagram:
+        platforms.append("instagram")
+    if oauth_manager.is_authenticated("youtube") and config_manager.get_config().upload_to_youtube:
+        platforms.append("youtube")
+    if oauth_manager.is_authenticated("tiktok") and config_manager.get_config().upload_to_tiktok:
+        platforms.append("tiktok")
+    
+    if not platforms:
+        print("[ERROR] No authenticated platforms available for upload")
+        return
+    
+    print(f"[AUTH] Uploading to: {', '.join(platforms)}")
+    
+    # Generate AI metadata
+    print("[AI] Generating captions and metadata...")
+    try:
+        metadata = ai_manager.generate_metadata(video_path)
+        print(f"[AI] Generated title: {metadata.get('title', 'N/A')}")
+        print(f"[AI] Generated caption: {metadata.get('caption', 'N/A')[:100]}...")
+        print(f"[AI] Generated hashtags: {metadata.get('hashtags', 'N/A')}")
+    except Exception as e:
+        print(f"[WARNING] AI generation failed: {e}")
+        print("[AI] Using fallback metadata...")
+        metadata = {
+            "title": f"Video {video_path.stem}",
+            "caption": f"Check out this amazing video! {video_path.stem}",
+            "hashtags": "#video #content #shorts"
+        }
+    
+    # Upload to platforms
+    print(f"\n[UPLOAD] Starting upload to {len(platforms)} platforms...")
+    results = upload_manager.upload_to_all_platforms(video_path, metadata, platforms)
+    
+    # Print results
+    print(f"\n[RESULTS] Upload Summary:")
+    for platform, result in results.items():
+        if result.success:
+            print(f"  [SUCCESS] {platform.upper()}: {result.video_id}")
+            if result.url:
+                print(f"    URL: {result.url}")
+        else:
+            print(f"  [ERROR] {platform.upper()}: {result.error}")
+    
+    # Show retry info if there were failures
+    failed_count = sum(1 for r in results.values() if not r.success)
+    if failed_count > 0:
+        print(f"\n[RETRY] {failed_count} uploads failed. Use 'uv run content-cli retry list' to see failed uploads.")
+        print("[RETRY] Use 'uv run content-cli retry all' to retry failed uploads.")
+
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(description="Content Creation CLI")
@@ -161,6 +305,11 @@ def main():
     test_parser.add_argument("--platform", choices=["instagram", "youtube", "tiktok", "all"],
                            default="all", help="Platform to test upload to")
     test_parser.set_defaults(func=test_upload)
+    
+    # Upload command
+    upload_parser = subparsers.add_parser("upload", help="Upload video with AI captions to all platforms")
+    upload_parser.add_argument("--video", required=True, help="Path to video file")
+    upload_parser.set_defaults(func=upload_video)
     
     # Configuration commands
     config_parser = subparsers.add_parser("config", help="Configuration management")
@@ -201,15 +350,50 @@ def main():
     config_validate_parser = config_subparsers.add_parser("validate", help="Validate current configuration")
     config_validate_parser.set_defaults(func=config_validate)
     
+    # Retry commands
+    retry_parser = subparsers.add_parser("retry", help="Retry failed uploads")
+    retry_subparsers = retry_parser.add_subparsers(dest="retry_command", help="Retry commands")
+    
+    # List failed uploads
+    retry_list_parser = retry_subparsers.add_parser("list", help="List all failed uploads")
+    retry_list_parser.set_defaults(func=retry_list)
+    
+    # Retry specific upload
+    retry_single_parser = retry_subparsers.add_parser("single", help="Retry specific failed upload")
+    retry_single_parser.add_argument("video_name", help="Name of video file")
+    retry_single_parser.add_argument("platform", choices=["instagram", "youtube", "tiktok"], 
+                                   help="Platform to retry")
+    retry_single_parser.set_defaults(func=retry_single)
+    
+    # Retry all failed uploads
+    retry_all_parser = retry_subparsers.add_parser("all", help="Retry all failed uploads")
+    retry_all_parser.add_argument("--platforms", help="Comma-separated platforms (default: all)")
+    retry_all_parser.set_defaults(func=retry_all)
+    
+    # Clear failed uploads
+    retry_clear_parser = retry_subparsers.add_parser("clear", help="Clear failed uploads")
+    retry_clear_parser.add_argument("--platform", choices=["instagram", "youtube", "tiktok"], 
+                                  help="Platform to clear (default: all)")
+    retry_clear_parser.set_defaults(func=retry_clear)
+    
     args = parser.parse_args()
     
     if not args.command:
         parser.print_help()
         return
     
-    # Handle nested config commands
+    # Handle nested commands
     if args.command == "config" and not hasattr(args, 'config_command'):
         config_parser.print_help()
+        return
+    
+    if args.command == "retry" and not hasattr(args, 'retry_command'):
+        retry_parser.print_help()
+        return
+    
+    # Handle retry command without subcommand - default to list
+    if args.command == "retry" and not hasattr(args, 'func'):
+        retry_list(args)
         return
     
     try:

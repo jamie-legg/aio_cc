@@ -2,6 +2,7 @@
 
 import os
 import json
+import time
 import webbrowser
 from pathlib import Path
 from typing import Dict, Optional, Any
@@ -143,9 +144,13 @@ class OAuthManager:
             long_lived_response.raise_for_status()
             long_lived_info = long_lived_response.json()
             
+            # Calculate actual expiration timestamp for Instagram
+            expires_in = long_lived_info.get("expires_in", 3600)
+            expires_at = int(time.time()) + expires_in
+            
             self.credentials["instagram"] = OAuthCredentials(
                 access_token=long_lived_info.get("access_token", token_info["access_token"]),
-                expires_at=long_lived_info.get("expires_in"),
+                expires_at=expires_at,
                 platform="instagram"
             )
             
@@ -276,10 +281,15 @@ class OAuthManager:
                 print(f"TikTok authentication failed: {token_info['error']['message']}")
                 return False
             
+            # Calculate actual expiration timestamp
+            import time
+            expires_in = token_info.get("expires_in", 3600)  # Default to 1 hour if not provided
+            expires_at = int(time.time()) + expires_in
+            
             self.credentials["tiktok"] = OAuthCredentials(
                 access_token=token_info["access_token"],
                 refresh_token=token_info.get("refresh_token"),
-                expires_at=token_info.get("expires_in"),
+                expires_at=expires_at,
                 scope=token_info.get("scope"),
                 user_id=token_info.get("open_id"),
                 platform="tiktok"
@@ -293,9 +303,169 @@ class OAuthManager:
             print(f"TikTok authentication failed: {e}")
             return False
     
+    def extend_instagram_token(self, creds: OAuthCredentials) -> bool:
+        """Extend Instagram long-lived access token."""
+        client_secret = os.getenv("INSTAGRAM_CLIENT_SECRET")
+        
+        if not client_secret:
+            print("Instagram client secret not found for token extension")
+            return False
+        
+        # Instagram token extension uses POST request with form data
+        extend_url = "https://graph.instagram.com/access_token"
+        data = {
+            "grant_type": "ig_exchange_token",
+            "client_secret": client_secret,
+            "access_token": creds.access_token
+        }
+        
+        try:
+            response = requests.post(extend_url, data=data)
+            
+            if response.status_code != 200:
+                print(f"Instagram token extension failed: {response.status_code} - {response.text}")
+                return False
+            
+            token_info = response.json()
+            
+            if token_info.get("error"):
+                print(f"Instagram token extension failed: {token_info['error']['message']}")
+                return False
+            
+            # Update credentials with extended token
+            expires_in = token_info.get("expires_in", 3600)
+            expires_at = int(time.time()) + expires_in
+            
+            creds.access_token = token_info["access_token"]
+            creds.expires_at = expires_at
+            
+            self._save_credentials()
+            print("Instagram token extended successfully!")
+            return True
+            
+        except Exception as e:
+            print(f"Instagram token extension failed: {e}")
+            return False
+    
+    def refresh_tiktok_token(self, creds: OAuthCredentials) -> bool:
+        """Refresh TikTok access token using refresh token."""
+        if not creds.refresh_token:
+            print("No refresh token available for TikTok")
+            return False
+        
+        client_key = os.getenv("TIKTOK_CLIENT_KEY")
+        client_secret = os.getenv("TIKTOK_CLIENT_SECRET")
+        
+        if not client_key or not client_secret:
+            print("TikTok credentials not found for token refresh")
+            return False
+        
+        token_url = "https://open.tiktokapis.com/v2/oauth/token/"
+        token_data = {
+            "client_key": client_key,
+            "client_secret": client_secret,
+            "grant_type": "refresh_token",
+            "refresh_token": creds.refresh_token,
+        }
+        
+        try:
+            response = requests.post(token_url, data=token_data)
+            response.raise_for_status()
+            
+            token_info = response.json()
+            
+            if token_info.get("error"):
+                print(f"TikTok token refresh failed: {token_info['error']['message']}")
+                return False
+            
+            # Update credentials with new token
+            import time
+            expires_in = token_info.get("expires_in", 3600)
+            expires_at = int(time.time()) + expires_in
+            
+            creds.access_token = token_info["access_token"]
+            creds.refresh_token = token_info.get("refresh_token", creds.refresh_token)  # Keep old refresh token if not provided
+            creds.expires_at = expires_at
+            
+            self._save_credentials()
+            print("TikTok token refreshed successfully!")
+            return True
+            
+        except Exception as e:
+            print(f"TikTok token refresh failed: {e}")
+            return False
+    
+    def refresh_youtube_token(self, creds: OAuthCredentials) -> bool:
+        """Refresh YouTube access token using Google's OAuth system."""
+        client_secrets_file = os.getenv("YOUTUBE_CLIENT_SECRETS_FILE")
+        
+        if not client_secrets_file:
+            print("YouTube client secrets file not found for token refresh")
+            return False
+        
+        SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
+        
+        try:
+            # Load existing credentials from the token file (Google's format)
+            token_file = self.credentials_dir / "youtube_token.json"
+            if not token_file.exists():
+                print("YouTube token file not found")
+                return False
+            
+            google_creds = Credentials.from_authorized_user_file(str(token_file), SCOPES)
+            
+            # Refresh the token
+            google_creds.refresh(Request())
+            
+            # Update our stored credentials
+            creds.access_token = google_creds.token
+            creds.refresh_token = google_creds.refresh_token
+            creds.expires_at = google_creds.expiry.timestamp() if google_creds.expiry else None
+            
+            # Save the updated Google credentials
+            with open(token_file, 'w') as token:
+                token.write(google_creds.to_json())
+            
+            self._save_credentials()
+            print("YouTube token refreshed successfully!")
+            return True
+            
+        except Exception as e:
+            print(f"YouTube token refresh failed: {e}")
+            return False
+    
     def get_credentials(self, platform: str) -> Optional[OAuthCredentials]:
-        """Get credentials for a specific platform."""
-        return self.credentials.get(platform)
+        """Get credentials for a specific platform, refreshing if needed."""
+        creds = self.credentials.get(platform)
+        if not creds:
+            return None
+        
+        # Check if token needs refresh/extension
+        if creds.expires_at and creds.expires_at <= int(time.time()):
+            print(f"[AUTH] {platform.upper()} token expired, attempting refresh...")
+            if platform == "tiktok" and creds.refresh_token:
+                if self.refresh_tiktok_token(creds):
+                    return creds
+                else:
+                    print(f"[AUTH] {platform.upper()} token refresh failed, re-authentication required")
+                    return None
+            elif platform == "instagram":
+                if self.extend_instagram_token(creds):
+                    return creds
+                else:
+                    print(f"[AUTH] {platform.upper()} token extension failed, re-authentication required")
+                    return None
+            elif platform == "youtube" and creds.refresh_token:
+                if self.refresh_youtube_token(creds):
+                    return creds
+                else:
+                    print(f"[AUTH] {platform.upper()} token refresh failed, re-authentication required")
+                    return None
+            else:
+                print(f"[AUTH] {platform.upper()} token expired and no refresh mechanism available")
+                return None
+        
+        return creds
     
     def is_authenticated(self, platform: str) -> bool:
         """Check if we have valid credentials for a platform."""

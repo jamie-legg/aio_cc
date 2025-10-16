@@ -33,6 +33,7 @@ class TikTokUploader:
                 "Content-Type": "application/json"
             }
             
+            # Original simple approach - upload entire file at once
             init_data = {
                 "source_info": {
                     "source": "FILE_UPLOAD",
@@ -43,9 +44,28 @@ class TikTokUploader:
             }
             
             print(f"Initializing TikTok upload for {video_path.name} ({video_size} bytes)...")
-            init_response = requests.post(init_url, headers=headers, json=init_data)
-            init_response.raise_for_status()
             
+            init_response = requests.post(init_url, headers=headers, json=init_data)
+            
+            # Better error handling for 400 errors
+            if init_response.status_code == 400:
+                try:
+                    error_data = init_response.json()
+                    error_msg = error_data.get("error", {}).get("message", "Bad Request")
+                    error_code = error_data.get("error", {}).get("code", "400")
+                    try:
+                        print(f"[ERROR] TikTok API 400 error: {error_code} - {error_msg}")
+                    except UnicodeEncodeError:
+                        print("[ERROR] TikTok API 400 error (contains non-ASCII characters)")
+                    return UploadResult("tiktok", False, error=f"TikTok API error: {error_code} - {error_msg}")
+                except:
+                    try:
+                        print(f"[ERROR] TikTok API 400 error: {init_response.text}")
+                    except UnicodeEncodeError:
+                        print("[ERROR] TikTok API 400 error (contains non-ASCII characters)")
+                    return UploadResult("tiktok", False, error=f"TikTok API error: {init_response.text}")
+            
+            init_response.raise_for_status()
             init_result = init_response.json()
             
             # Check if there's an actual error (not just the standard response structure)
@@ -56,13 +76,28 @@ class TikTokUploader:
             publish_id = init_result["data"]["publish_id"]
             
             print(f"Uploading video to TikTok...")
-            # Step 2: Upload video file using PUT request
+            # Step 2: Upload video file
             with open(video_path, 'rb') as video_file:
+                video_data = video_file.read()
+                video_size = len(video_data)
+                
                 upload_headers = {
                     "Content-Range": f"bytes 0-{video_size-1}/{video_size}",
+                    "Content-Length": str(video_size),
                     "Content-Type": "video/mp4"
                 }
-                upload_response = requests.put(upload_url, data=video_file, headers=upload_headers)
+                
+                print(f"Uploading video ({video_size} bytes)...")
+                upload_response = requests.put(upload_url, data=video_data, headers=upload_headers)
+                
+                # Better error handling for upload errors
+                if upload_response.status_code >= 400:
+                    try:
+                        print(f"[ERROR] TikTok upload error: {upload_response.status_code} - {upload_response.text}")
+                    except UnicodeEncodeError:
+                        print(f"[ERROR] TikTok upload error (contains non-ASCII characters)")
+                    return UploadResult("tiktok", False, error=f"Upload failed: {upload_response.status_code} - {upload_response.text}")
+                
                 upload_response.raise_for_status()
             
             print(f"Video uploaded successfully. Checking status...")
@@ -84,14 +119,15 @@ class TikTokUploader:
                 
                 status = status_result["data"]["status"]
                 
-                if status in ["PROCESSING_DONE", "SEND_TO_USER_INBOX"]:
-                    # Upload successful - video is now in user's inbox
+                if status in ["PROCESSING_DONE", "PUBLISH_COMPLETE", "SEND_TO_USER_INBOX"]:
+                    # Upload successful - video is published or in inbox
                     video_id = status_result["data"].get("publish_id", publish_id)
+                    share_url = status_result["data"].get("share_url", "")
                     return UploadResult(
                         "tiktok",
                         True,
                         video_id=video_id,
-                        url=f"Video uploaded to TikTok inbox (ID: {video_id})"
+                        url=share_url if share_url else f"Video published to TikTok (ID: {video_id})"
                     )
                 elif status == "FAILED":
                     fail_reason = status_result["data"].get("fail_reason", "Unknown reason")

@@ -13,6 +13,127 @@ class VideoProcessor:
         """Initialize the video processor."""
         self.supported_formats = ['.mp4', '.mov', '.avi', '.mkv', '.webm']
     
+    def optimize_for_platform(self, input_path: Path, platform: str, output_path: Optional[Path] = None) -> Path:
+        """
+        Optimize video for specific platform requirements.
+        
+        Args:
+            input_path: Path to input video file
+            platform: Target platform ('instagram', 'youtube', 'tiktok')
+            output_path: Path for output file (optional)
+            
+        Returns:
+            Path to optimized video file
+        """
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input video not found: {input_path}")
+        
+        if output_path is None:
+            # Always output as MP4 for better platform compatibility
+            output_path = input_path.parent / f"{input_path.stem}_{platform}_optimized.mp4"
+        
+        print(f"[OPTIMIZE] Optimizing video for {platform.upper()}: {input_path.name}")
+        
+        # Get current video info
+        info = self.get_video_info(input_path)
+        current_width = info['width']
+        current_height = info['height']
+        current_duration = info['duration']
+        current_fps = info.get('fps', 30)
+        
+        print(f"[DEBUG] Current video: {current_width}x{current_height} @ {current_fps:.1f}fps")
+        
+        # Platform-specific optimization settings
+        crf = "23"  # Default CRF value
+        
+        if platform == 'instagram':
+            target_width = 1080
+            target_height = 1920
+            target_fps = 60  # Increased to 60fps for smoother video
+            video_bitrate = "8M"  # Increased for 60fps (more data per second)
+            audio_bitrate = "192k"  # Increased from 128k
+            
+        elif platform == 'youtube':
+            target_width = 1080
+            target_height = 1920
+            target_fps = 60  # Increased to 60fps for smoother video
+            video_bitrate = "12M"  # Increased for 60fps (more data per second)
+            audio_bitrate = "192k"  # Increased from 128k
+            
+        elif platform == 'tiktok':
+            target_width = 1080
+            target_height = 1920
+            target_fps = 60  # Increased to 60fps for smoother video
+            
+            # Check file size and apply compression if needed
+            file_size_mb = input_path.stat().st_size / (1024 * 1024)
+            if file_size_mb > 100:  # If larger than 100MB, apply aggressive compression
+                print(f"[COMPRESS] Video is {file_size_mb:.1f}MB, applying TikTok compression...")
+                video_bitrate = "4M"  # Reduced bitrate for compression
+                audio_bitrate = "128k"  # Reduced audio bitrate
+                crf = "28"  # Higher CRF for more compression
+            else:
+                video_bitrate = "8M"  # Normal bitrate for smaller files
+                audio_bitrate = "192k"
+                crf = "23"  # Normal quality
+            
+        else:
+            raise ValueError(f"Unsupported platform: {platform}")
+        
+        print(f"[DEBUG] Target settings: {target_width}x{target_height} @ {target_fps}fps")
+        
+        # Check if optimization is needed (resolution, FPS, or file size for TikTok)
+        needs_optimization = (
+            current_width != target_width or 
+            current_height != target_height or
+            abs(current_fps - target_fps) > 0.1 or  # Allow small FPS differences
+            (platform == 'tiktok' and file_size_mb > 100)  # Force compression for large TikTok videos
+        )
+        
+        if not needs_optimization:
+            print(f"[SUCCESS] Video already optimized for {platform.upper()} (resolution: {current_width}x{current_height}, FPS: {current_fps:.1f})")
+            return input_path
+        
+        # Build base video filter
+        base_filter = f'scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2:black'
+        
+        # Use base filter for resolution scaling only
+        video_filter = base_filter
+        
+        # Build FFmpeg command for optimization
+        cmd = [
+            'ffmpeg', '-y',  # Overwrite output file
+            '-i', str(input_path),
+            '-vf', video_filter,
+            '-c:v', 'libx264',
+            '-preset', 'fast',
+            '-crf', crf,
+            '-maxrate', video_bitrate,
+            '-bufsize', f"{int(video_bitrate.replace('M', '')) * 2}M",
+            '-r', str(target_fps),
+            '-c:a', 'aac',
+            '-b:a', audio_bitrate,
+            '-ar', '48000',
+            '-ac', '2',
+            '-movflags', '+faststart'
+        ]
+        
+        # No duration modifications - keep original length
+        
+        # Add output file
+        cmd.append(str(output_path))
+        
+        print(f"[PROCESS] Running optimization: {' '.join(cmd[2:4])}...")
+        
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            print(f"[SUCCESS] Video optimized for {platform.upper()}: {output_path.name}")
+            return output_path
+        except subprocess.CalledProcessError as e:
+            print(f"[ERROR] Optimization failed: {e}")
+            print(f"FFmpeg error: {e.stderr}")
+            raise
+
     def process_for_shorts(self, input_path: Path, output_path: Optional[Path] = None, 
                           audio_track: Optional[Path] = None, fade_duration: float = 1.0) -> Path:
         """
@@ -44,12 +165,12 @@ class VideoProcessor:
         if output_path is None:
             output_path = input_path.parent / f"{input_path.stem}_shorts{input_path.suffix}"
         
-        print(f"🎬 Processing video for Shorts: {input_path.name}")
-        print(f"📐 Converting to 9:16 aspect ratio...")
+        print(f"[PROCESS] Processing video for Shorts: {input_path.name}")
+        print(f"[CONVERT] Converting to 9:16 aspect ratio...")
         if audio_track:
-            print(f"🎵 Adding audio track: {audio_track.name}")
+            print(f"[AUDIO] Adding audio track: {audio_track.name}")
         if fade_duration > 0:
-            print(f"✨ Adding fade in/out: {fade_duration}s")
+            print(f"[FADE] Adding fade in/out: {fade_duration}s")
         
         try:
             # Get video dimensions and duration
@@ -57,22 +178,22 @@ class VideoProcessor:
             video_info = self.get_video_info(input_path)
             duration = video_info['duration']
             
-            print(f"📏 Original dimensions: {width}x{height}")
-            print(f"⏱️  Video duration: {duration:.1f}s")
+            print(f"[DIMENSIONS] Original dimensions: {width}x{height}")
+            print(f"[DURATION] Video duration: {duration:.1f}s")
             
             # Calculate target dimensions for 9:16
             target_width, target_height = self._calculate_9_16_dimensions(width, height)
-            print(f"🎯 Target dimensions: {target_width}x{target_height}")
+            print(f"[TARGET] Target dimensions: {target_width}x{target_height}")
             
             # Process video with FFmpeg
             self._convert_to_9_16_with_audio(input_path, output_path, target_width, target_height, 
                                            audio_track, fade_duration, duration)
             
-            print(f"✅ Video processed successfully: {output_path.name}")
+            print(f"[SUCCESS] Video processed successfully: {output_path.name}")
             return output_path
             
         except Exception as e:
-            print(f"❌ Video processing failed: {e}")
+            print(f"[ERROR] Video processing failed: {e}")
             raise
     
     def _is_supported_format(self, file_path: Path) -> bool:
@@ -186,32 +307,32 @@ class VideoProcessor:
                 if audio_filters:
                     cmd.extend(['-af', ','.join(audio_filters)])
             
-            # Output settings optimized for Instagram Reels (per Facebook docs)
+            # Output settings optimized for high quality 60fps
             cmd.extend([
                 '-c:v', 'libx264',
-                '-preset', 'medium',  # Better quality than 'fast'
-                '-crf', '20',  # Better quality than 23
-                '-maxrate', '4M',  # Max bitrate 4Mbps for Instagram
-                '-bufsize', '8M',  # Buffer size
-                '-r', '30',  # Force 30fps for Instagram (within 24-60 range)
+                '-preset', 'slow',  # Best quality preset
+                '-crf', '18',  # Higher quality (lower CRF = better quality)
+                '-maxrate', '8M',  # High bitrate for 60fps
+                '-bufsize', '16M',  # 2x bitrate buffer
+                '-r', '60',  # Force 60fps for smooth video
                 '-c:a', 'aac',
-                '-b:a', '128k',  # Audio bitrate 128kbs+ (per specs)
+                '-b:a', '192k',  # High quality audio
                 '-ar', '48000',  # Sample rate 48kHz (per specs)
                 '-ac', '2',  # Stereo channels (per specs)
                 '-profile:a', 'aac_low',  # AAC Low Complexity (per specs)
                 '-movflags', '+faststart',
                 '-pix_fmt', 'yuv420p',  # Chroma subsampling 4:2:0 (per specs)
-                '-g', '60',  # Closed GOP 2-5 seconds (30fps * 2s = 60 frames)
-                '-keyint_min', '60',  # Minimum keyframe interval
+                '-g', '120',  # Closed GOP 2-5 seconds (60fps * 2s = 120 frames)
+                '-keyint_min', '120',  # Minimum keyframe interval
                 '-sc_threshold', '0',  # Disable scene change detection for fixed frame rate
                 '-y',  # Overwrite output file
                 str(output_path)
             ])
             
-            print(f"🔧 Running FFmpeg: {' '.join(cmd)}")
+            print(f"[FFMPEG] Running FFmpeg: {' '.join(cmd)}")
             
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            print("✅ FFmpeg conversion completed")
+            print("[SUCCESS] FFmpeg conversion completed")
             
         except subprocess.CalledProcessError as e:
             error_msg = e.stderr if e.stderr else "Unknown FFmpeg error"
@@ -349,7 +470,7 @@ class VideoProcessor:
             max_duration = 90  # 90 seconds max
             min_duration = 3   # 3 seconds min
             max_file_size = 100 * 1024 * 1024  # 100MB max (conservative)
-            max_bitrate = 5 * 1024 * 1024  # 5Mbps max (conservative)
+            max_bitrate = 8 * 1024 * 1024  # 8Mbps max (increased for higher quality)
             
             # Resolution requirements (per Facebook docs)
             min_width = 540   # Minimum 540x960
@@ -359,10 +480,10 @@ class VideoProcessor:
             
             # Frame rate requirements (per Facebook docs)
             min_fps = 24
-            max_fps = 60
+            max_fps = 60  # Instagram supports up to 60fps
             
             # Audio requirements (per Facebook docs)
-            min_audio_bitrate = 128 * 1000  # 128kbs+
+            min_audio_bitrate = 192 * 1000  # 192kbs+ (increased for higher quality)
             required_sample_rate = 48000  # 48kHz
             required_channels = 2  # Stereo
             required_audio_codec = 'aac'  # AAC Low Complexity

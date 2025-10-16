@@ -111,7 +111,7 @@ def process_clip(path):
     # Use processed video for uploads if available, otherwise use original
     upload_path = processed_video_path if processed_video_path else new_path
     if processed_video_path:
-        print(f"📤 Using processed video for uploads: {upload_path.name}")
+        print(f"[UPLOAD] Using processed video for uploads: {upload_path.name}")
     
     # Upload to social media platforms
     upload_to_social_media(upload_path, ai_meta)
@@ -152,7 +152,7 @@ def upload_to_social_media(video_path, metadata):
         print("No platforms configured for upload")
         return
     
-    print(f"\n[📤] Uploading to {', '.join(platforms)}...")
+    print(f"\n[UPLOAD] Uploading to {', '.join(platforms)}...")
     
     # Check authentication for each platform
     for platform in platforms:
@@ -202,10 +202,65 @@ def watch_folder():
         seen = current
         time.sleep(3)
 
+def print_startup_config():
+    """Print configuration and status at startup."""
+    print("=" * 60)
+    print("AI CONTENT CREATION TOOL - STARTUP CONFIGURATION")
+    print("=" * 60)
+    
+    # Import config manager
+    from managers.config_manager import ConfigManager
+    config_manager = ConfigManager()
+    config = config_manager.get_config()
+    
+    # Print basic configuration
+    print(f"\n[CONFIG] Watch Directory: {config.watch_dir}")
+    print(f"[CONFIG] Processed Directory: {config.processed_dir}")
+    print(f"[CONFIG] Video Extensions: {', '.join(config.video_extensions)}")
+    
+    # Print FTP server configuration
+    print(f"\n[FTP SERVER]")
+    ftp_url = os.getenv("FTP_URL", "Not configured")
+    ftp_bucket = os.getenv("FTP_BUCKET", "Not configured")
+    print(f"  URL: {ftp_url}")
+    print(f"  Bucket: {ftp_bucket}")
+    
+    # Print upload platforms with auth status
+    print(f"\n[UPLOAD PLATFORMS]")
+    platforms = [
+        ("Instagram", config.upload_to_instagram, "instagram"),
+        ("YouTube", config.upload_to_youtube, "youtube"),
+        ("TikTok", config.upload_to_tiktok, "tiktok")
+    ]
+    
+    for platform_name, enabled, platform_key in platforms:
+        auth_status = "[AUTHENTICATED]" if oauth_manager.is_authenticated(platform_key) else "[NOT AUTHENTICATED]"
+        enabled_status = "[ENABLED]" if enabled else "[DISABLED]"
+        print(f"  {platform_name}: {enabled_status} {auth_status}")
+    
+    # Print directory status
+    print(f"\n[DIRECTORY STATUS]")
+    watch_path = Path(config.watch_dir)
+    processed_path = Path(config.processed_dir)
+    print(f"  Watch Directory: {'[EXISTS]' if watch_path.exists() else '[NOT FOUND]'}")
+    print(f"  Processed Directory: {'[EXISTS]' if processed_path.exists() else '[NOT FOUND]'}")
+    
+    # Count video files
+    if watch_path.exists():
+        video_count = 0
+        for ext in config.video_extensions:
+            video_count += len(list(watch_path.glob(f"*{ext}")))
+        print(f"  Video files in watch directory: {video_count}")
+    
+    print("=" * 60)
+
 def main():
     """Main entry point for the clip watcher."""
     
-    # check for authentication
+    # Print startup configuration
+    print_startup_config()
+    
+    # Check for authentication
     if not oauth_manager.is_authenticated("instagram"):
         print("[ERROR] Instagram not authenticated. Run 'uv run content-cli auth instagram' to authenticate.")
         return

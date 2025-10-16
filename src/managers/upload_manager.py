@@ -1,7 +1,9 @@
 """Upload manager for posting videos to social media platforms."""
 
+import json
 from pathlib import Path
 from typing import Dict, List, Any
+from datetime import datetime
 
 from .oauth_manager import OAuthManager
 from content_creation.types import FTPUploader, UploadResult
@@ -18,6 +20,10 @@ class UploadManager:
         self.instagram_uploader = InstagramUploader(self.ftp_uploader)
         self.youtube_uploader = YouTubeUploader()
         self.tiktok_uploader = TikTokUploader()
+        
+        # Failed uploads tracking
+        self.failed_uploads_file = Path.home() / ".content_creation" / "failed_uploads.json"
+        self.failed_uploads_file.parent.mkdir(exist_ok=True)
     
     def upload_to_instagram(self, video_path: Path, metadata: Dict[str, str]) -> UploadResult:
         """Upload video to Instagram Reels using FTP server and video_url parameter."""
@@ -52,19 +58,19 @@ class UploadManager:
         # Ensure we have a title
         if not validated.get('title', '').strip():
             validated['title'] = f"Gaming Clip - {video_path.stem}"
-            print(f"⚠️  No title in metadata, using fallback: {validated['title']}")
+            print(f"[WARNING] No title in metadata, using fallback: {validated['title']}")
         
         # Ensure we have caption or hashtags
         if not validated.get('caption', '').strip() and not validated.get('hashtags', '').strip():
             validated['caption'] = "Check out this epic gaming moment! 🎮"
             validated['hashtags'] = "#gaming #shorts"
-            print(f"⚠️  No caption/hashtags in metadata, using fallback")
+            print(f"[WARNING] No caption/hashtags in metadata, using fallback")
         
         return validated
 
     def upload_to_all_platforms(self, video_path: Path, metadata: Dict[str, str], 
                               platforms: List[str] = None) -> Dict[str, UploadResult]:
-        """Upload video to all specified platforms."""
+        """Upload video to all specified platforms with platform-specific optimization."""
         if platforms is None:
             platforms = ["instagram", "youtube", "tiktok"]
         
@@ -75,28 +81,182 @@ class UploadManager:
         # Validate and fix metadata
         validated_metadata = self._validate_metadata(metadata, video_path)
         
+        # Import video processor for optimization
+        from content_creation.video_processor import VideoProcessor
+        video_processor = VideoProcessor()
+        
         for platform in platforms:
             print(f"\n--- Uploading to {platform.upper()} ---")
             
+            # Optimize video for platform-specific requirements
+            try:
+                optimized_video = video_processor.optimize_for_platform(video_path, platform)
+                print(f"Using optimized video: {optimized_video.name}")
+            except Exception as e:
+                print(f"[WARNING] Optimization failed for {platform}: {e}")
+                print("Using original video...")
+                optimized_video = video_path
+            
             if platform == "instagram":
-                results[platform] = self.upload_to_instagram(video_path, validated_metadata)
+                results[platform] = self.upload_to_instagram(optimized_video, validated_metadata)
             elif platform == "youtube":
-                results[platform] = self.upload_to_youtube(video_path, validated_metadata)
+                results[platform] = self.upload_to_youtube(optimized_video, validated_metadata)
             elif platform == "tiktok":
-                results[platform] = self.upload_to_tiktok(video_path, validated_metadata)
+                results[platform] = self.upload_to_tiktok(optimized_video, validated_metadata)
             else:
                 results[platform] = UploadResult(platform, False, error="Unknown platform")
             
             # Print result
             result = results[platform]
             if result.success:
-                print(f"✅ {platform.upper()}: Success! Video ID: {result.video_id}")
+                print(f"[SUCCESS] {platform.upper()}: Success! Video ID: {result.video_id}")
                 if result.url:
                     print(f"   URL: {result.url}")
             else:
-                print(f"❌ {platform.upper()}: Failed - {result.error}")
+                print(f"[ERROR] {platform.upper()}: Failed - {result.error}")
+        
+        # Track failed uploads for retry
+        self._track_failed_uploads(video_path, validated_metadata, results)
         
         return results
+    
+    def _track_failed_uploads(self, video_path: Path, metadata: Dict[str, str], results: Dict[str, UploadResult]):
+        """Track failed uploads for later retry."""
+        failed_uploads = self._load_failed_uploads()
+        
+        for platform, result in results.items():
+            if not result.success:
+                failed_entry = {
+                    "video_path": str(video_path),
+                    "platform": platform,
+                    "metadata": metadata,
+                    "error": result.error,
+                    "timestamp": datetime.now().isoformat(),
+                    "retry_count": 0
+                }
+                
+                # Check if this video/platform combination already exists
+                existing_key = f"{video_path.name}_{platform}"
+                if existing_key not in failed_uploads:
+                    failed_uploads[existing_key] = failed_entry
+                    print(f"[RETRY] Added {platform.upper()} upload to retry queue")
+        
+        self._save_failed_uploads(failed_uploads)
+    
+    def _load_failed_uploads(self) -> Dict[str, Any]:
+        """Load failed uploads from file."""
+        if not self.failed_uploads_file.exists():
+            return {}
+        
+        try:
+            with open(self.failed_uploads_file, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"[WARNING] Could not load failed uploads: {e}")
+            return {}
+    
+    def _save_failed_uploads(self, failed_uploads: Dict[str, Any]):
+        """Save failed uploads to file."""
+        try:
+            with open(self.failed_uploads_file, 'w') as f:
+                json.dump(failed_uploads, f, indent=2)
+        except Exception as e:
+            print(f"[WARNING] Could not save failed uploads: {e}")
+    
+    def list_failed_uploads(self) -> Dict[str, Any]:
+        """List all failed uploads available for retry."""
+        return self._load_failed_uploads()
+    
+    def retry_failed_upload(self, video_name: str, platform: str) -> UploadResult:
+        """Retry a specific failed upload."""
+        failed_uploads = self._load_failed_uploads()
+        key = f"{video_name}_{platform}"
+        
+        if key not in failed_uploads:
+            return UploadResult(platform, False, error="Failed upload not found")
+        
+        failed_entry = failed_uploads[key]
+        video_path = Path(failed_entry["video_path"])
+        metadata = failed_entry["metadata"]
+        
+        if not video_path.exists():
+            return UploadResult(platform, False, error="Video file no longer exists")
+        
+        print(f"[RETRY] Retrying {platform.upper()} upload for {video_name}")
+        
+        # Optimize video for platform-specific requirements
+        from content_creation.video_processor import VideoProcessor
+        video_processor = VideoProcessor()
+        
+        try:
+            optimized_video = video_processor.optimize_for_platform(video_path, platform)
+            print(f"[OPTIMIZE] Using optimized video: {optimized_video.name}")
+        except Exception as e:
+            print(f"[WARNING] Optimization failed for {platform}: {e}")
+            print("[WARNING] Using original video...")
+            optimized_video = video_path
+        
+        # Retry the upload with optimized video
+        if platform == "instagram":
+            result = self.upload_to_instagram(optimized_video, metadata)
+        elif platform == "youtube":
+            result = self.upload_to_youtube(optimized_video, metadata)
+        elif platform == "tiktok":
+            result = self.upload_to_tiktok(optimized_video, metadata)
+        else:
+            return UploadResult(platform, False, error="Unknown platform")
+        
+        # Update retry count
+        failed_entry["retry_count"] += 1
+        
+        if result.success:
+            # Remove from failed uploads if successful
+            del failed_uploads[key]
+            print(f"[SUCCESS] {platform.upper()} retry successful!")
+        else:
+            # Update error message
+            failed_entry["error"] = result.error
+            failed_entry["timestamp"] = datetime.now().isoformat()
+            print(f"[FAILED] {platform.upper()} retry failed: {result.error}")
+        
+        self._save_failed_uploads(failed_uploads)
+        return result
+    
+    def retry_all_failed_uploads(self, platforms: List[str] = None) -> Dict[str, UploadResult]:
+        """Retry all failed uploads for specified platforms."""
+        if platforms is None:
+            platforms = ["instagram", "youtube", "tiktok"]
+        
+        failed_uploads = self._load_failed_uploads()
+        results = {}
+        
+        print(f"[RETRY] Retrying failed uploads for platforms: {', '.join(platforms)}")
+        
+        for key, failed_entry in list(failed_uploads.items()):
+            platform = failed_entry["platform"]
+            if platform in platforms:
+                video_name = failed_entry["video_path"].split("\\")[-1]  # Get just filename
+                result = self.retry_failed_upload(video_name, platform)
+                results[f"{video_name}_{platform}"] = result
+        
+        return results
+    
+    def clear_failed_uploads(self, platform: str = None):
+        """Clear failed uploads (optionally for specific platform)."""
+        failed_uploads = self._load_failed_uploads()
+        
+        if platform:
+            # Remove only specific platform failures
+            keys_to_remove = [key for key, entry in failed_uploads.items() if entry["platform"] == platform]
+            for key in keys_to_remove:
+                del failed_uploads[key]
+            print(f"[CLEAR] Cleared failed uploads for {platform.upper()}")
+        else:
+            # Clear all failed uploads
+            failed_uploads.clear()
+            print("[CLEAR] Cleared all failed uploads")
+        
+        self._save_failed_uploads(failed_uploads)
     
     def _extract_hashtags(self, hashtags_str: str) -> List[str]:
         """Extract hashtags from string and return as list."""

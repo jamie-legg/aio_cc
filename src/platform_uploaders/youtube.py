@@ -44,7 +44,7 @@ class YouTubeUploader:
                         client_id = secrets.get('installed', {}).get('client_id')
                         client_secret = secrets.get('installed', {}).get('client_secret')
                 except Exception as e:
-                    print(f"⚠️  Could not load YouTube credentials from JSON file: {e}")
+                    print(f"[WARNING] Could not load YouTube credentials from JSON file: {e}")
             
             # Fall back to environment variables
             if not client_id or not client_secret:
@@ -67,12 +67,12 @@ class YouTubeUploader:
             title = metadata.get('title', '').strip()
             if not title:
                 title = f"Gaming Clip - {video_path.stem}"
-                print(f"⚠️  Empty title in metadata, using fallback: {title}")
+                print(f"[WARNING] Empty title in metadata, using fallback: {title}")
             
             description = f"{metadata.get('caption', '')}\n\n{metadata.get('hashtags', '')}".strip()
             if not description:
                 description = "Check out this epic gaming moment! 🎮"
-                print(f"⚠️  Empty description in metadata, using fallback: {description}")
+                print(f"[WARNING] Empty description in metadata, using fallback: {description}")
             
             body = {
                 'snippet': {
@@ -87,7 +87,7 @@ class YouTubeUploader:
                 }
             }
             
-            print(f"🔍 DEBUG: YouTube metadata prepared:")
+            print(f"[DEBUG] YouTube metadata prepared:")
             print(f"  Title: '{body['snippet']['title']}'")
             print(f"  Description: '{body['snippet']['description']}'")
             print(f"  Tags: {body['snippet']['tags']}")
@@ -113,8 +113,8 @@ class YouTubeUploader:
                 video_id = response['id']
                 video_url = f"https://www.youtube.com/shorts/{video_id}"
                 
-                print(f"✅ YouTube Short uploaded successfully! Video ID: {video_id}")
-                print(f"🔗 Short URL: {video_url}")
+                print(f"[SUCCESS] YouTube Short uploaded successfully! Video ID: {video_id}")
+                print(f"[URL] Short URL: {video_url}")
                 
                 return UploadResult(
                     "youtube",
@@ -138,7 +138,7 @@ class YouTubeUploader:
         
         while response is None:
             try:
-                print("📤 Uploading video to YouTube...")
+                print("[UPLOAD] Uploading video to YouTube...")
                 status, response = insert_request.next_chunk()
                 
                 if status:
@@ -147,27 +147,27 @@ class YouTubeUploader:
                 
                 if response is not None:
                     if 'id' in response:
-                        print(f"✅ Video uploaded successfully! ID: {response['id']}")
+                        print(f"[SUCCESS] Video uploaded successfully! ID: {response['id']}")
                         return response
                     else:
-                        print(f"❌ Unexpected response: {response}")
+                        print(f"[ERROR] Unexpected response: {response}")
                         return None
                         
             except HttpError as e:
                 if e.resp.status in RETRIABLE_STATUS_CODES:
                     error = f"Retriable HTTP error {e.resp.status}: {e.content}"
                 else:
-                    print(f"❌ Non-retriable HTTP error: {e}")
+                    print(f"[ERROR] Non-retriable HTTP error: {e}")
                     raise
             except RETRIABLE_EXCEPTIONS as e:
                 error = f"Retriable error: {e}"
             
             if error is not None:
-                print(f"⚠️ {error}")
+                print(f"[WARNING] {error}")
                 retry += 1
                 
                 if retry > MAX_RETRIES:
-                    print(f"❌ Max retries ({MAX_RETRIES}) exceeded")
+                    print(f"[ERROR] Max retries ({MAX_RETRIES}) exceeded")
                     return None
                 
                 # Exponential backoff

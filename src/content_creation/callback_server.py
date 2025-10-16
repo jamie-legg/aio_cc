@@ -121,9 +121,9 @@ class OAuthCallbackServer:
             if self.use_ngrok:
                 self.ngrok_manager = NgrokManager()
                 if self.ngrok_manager.start_tunnel(self.port, domain=self.ngrok_domain):
-                    print(f"🌐 Public callback URL: {self.ngrok_manager.get_callback_url()}")
+                    print(f"[NGROK] Public callback URL: {self.ngrok_manager.get_callback_url()}")
                 else:
-                    print("⚠️  Failed to start ngrok tunnel, using localhost only")
+                    print("[WARNING] Failed to start ngrok tunnel, using localhost only")
                     self.use_ngrok = False
             
             return True

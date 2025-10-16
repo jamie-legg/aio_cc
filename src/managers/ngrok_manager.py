@@ -21,12 +21,12 @@ class NgrokManager:
         if self.auth_token:
             try:
                 ngrok.set_auth_token(self.auth_token)
-                print("✅ Ngrok authenticated successfully")
+                print("[SUCCESS] Ngrok authenticated successfully")
             except PyngrokError as e:
-                print(f"⚠️  Ngrok authentication failed: {e}")
+                print(f"[WARNING] Ngrok authentication failed: {e}")
                 print("You can still use ngrok without authentication (with limitations)")
         else:
-            print("⚠️  No NGROK_AUTH_TOKEN found. Using ngrok without authentication.")
+            print("[WARNING] No NGROK_AUTH_TOKEN found. Using ngrok without authentication.")
             print("For better reliability, get a free token at https://dashboard.ngrok.com/get-started/your-authtoken")
     
     def start_tunnel(self, port: int = 18473, domain: Optional[str] = None) -> Optional[str]:
@@ -43,8 +43,8 @@ class NgrokManager:
             
             self.public_url = self.tunnel.public_url
             
-            print(f"✅ Ngrok tunnel started successfully")
-            print(f"🌐 Public URL: {self.public_url}")
+            print(f"[SUCCESS] Ngrok tunnel started successfully")
+            print(f"[NGROK] Public URL: {self.public_url}")
             print(f"🔗 Callback URL: {self.public_url}/callback")
             
             return self.public_url
@@ -52,7 +52,7 @@ class NgrokManager:
         except PyngrokError as e:
             error_msg = str(e)
             if "simultaneous ngrok agent sessions" in error_msg:
-                print("⚠️  Another ngrok session is running. Attempting to kill it...")
+                print("[WARNING]  Another ngrok session is running. Attempting to kill it...")
                 self._kill_existing_ngrok()
                 try:
                     # Try again after killing existing sessions
@@ -61,18 +61,18 @@ class NgrokManager:
                     else:
                         self.tunnel = ngrok.connect(port, "http")
                     self.public_url = self.tunnel.public_url
-                    print(f"✅ Ngrok tunnel started successfully after cleanup")
-                    print(f"🌐 Public URL: {self.public_url}")
+                    print(f"[SUCCESS] Ngrok tunnel started successfully after cleanup")
+                    print(f"[NGROK] Public URL: {self.public_url}")
                     print(f"🔗 Callback URL: {self.public_url}/callback")
                     return self.public_url
                 except PyngrokError as e2:
-                    print(f"❌ Still failed after cleanup: {e2}")
+                    print(f"[ERROR] Still failed after cleanup: {e2}")
                     return None
             else:
-                print(f"❌ Failed to start ngrok tunnel: {e}")
+                print(f"[ERROR] Failed to start ngrok tunnel: {e}")
                 return None
         except Exception as e:
-            print(f"❌ Unexpected error starting ngrok: {e}")
+            print(f"[ERROR] Unexpected error starting ngrok: {e}")
             return None
     
     def _kill_existing_ngrok(self):
@@ -94,16 +94,16 @@ class NgrokManager:
             time.sleep(1)
             
         except Exception as e:
-            print(f"⚠️  Could not kill existing ngrok processes: {e}")
+            print(f"[WARNING]  Could not kill existing ngrok processes: {e}")
     
     def stop_tunnel(self):
         """Stop the ngrok tunnel."""
         if self.tunnel:
             try:
                 ngrok.disconnect(self.tunnel.public_url)
-                print("✅ Ngrok tunnel stopped")
+                print("[SUCCESS] Ngrok tunnel stopped")
             except PyngrokError as e:
-                print(f"⚠️  Error stopping ngrok tunnel: {e}")
+                print(f"[WARNING]  Error stopping ngrok tunnel: {e}")
             finally:
                 self.tunnel = None
                 self.public_url = None
@@ -146,7 +146,7 @@ def test_ngrok():
     manager = NgrokManager()
     
     if manager.start_tunnel():
-        print("✅ Ngrok test successful!")
+        print("[SUCCESS] Ngrok test successful!")
         print(f"Tunnel info: {manager.get_tunnel_info()}")
         
         # Keep tunnel open for a few seconds to test
@@ -154,9 +154,9 @@ def test_ngrok():
         time.sleep(10)
         
         manager.stop_tunnel()
-        print("✅ Test completed")
+        print("[SUCCESS] Test completed")
     else:
-        print("❌ Ngrok test failed")
+        print("[ERROR] Ngrok test failed")
 
 if __name__ == "__main__":
     test_ngrok()
