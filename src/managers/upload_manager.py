@@ -1,11 +1,13 @@
 """Upload manager for posting videos to social media platforms."""
 
 import json
+import os
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from datetime import datetime
 
 from .oauth_manager import OAuthManager
+from .discord_service import DiscordWebhookService
 from content_creation.types import FTPUploader, UploadResult
 from platform_uploaders import InstagramUploader, YouTubeUploader, TikTokUploader
 
@@ -21,9 +23,27 @@ class UploadManager:
         self.youtube_uploader = YouTubeUploader()
         self.tiktok_uploader = TikTokUploader()
         
+        # Initialize Discord webhook service
+        self.discord_service = DiscordWebhookService()
+        
         # Failed uploads tracking
         self.failed_uploads_file = Path.home() / ".content_creation" / "failed_uploads.json"
         self.failed_uploads_file.parent.mkdir(exist_ok=True)
+        
+        # Initialize local analytics tracking (auto-detect)
+        self.analytics_url: Optional[str] = None
+        analytics_url = os.getenv("ANALYTICS_API_URL", "http://localhost:8000")
+        
+        # Try to connect to local analytics server
+        try:
+            import requests
+            response = requests.get(f"{analytics_url}/health", timeout=2)
+            if response.status_code == 200:
+                self.analytics_url = analytics_url
+                print(f"[📊] Analytics tracking enabled: {analytics_url}")
+        except Exception:
+            # Analytics server not running, disable tracking silently
+            pass
     
     def upload_to_instagram(self, video_path: Path, metadata: Dict[str, str]) -> UploadResult:
         """Upload video to Instagram Reels using FTP server and video_url parameter."""
@@ -50,6 +70,72 @@ class UploadManager:
             return UploadResult("tiktok", False, error="Not authenticated")
         
         return self.tiktok_uploader.upload(video_path, metadata, creds)
+    
+    def _track_upload_analytics(self, platform: str, video_path: Path, metadata: Dict[str, str], result: UploadResult):
+        """Track upload to local analytics server (delivery notification)."""
+        if not self.analytics_url:
+            return  # Analytics server not running
+        
+        try:
+            import requests
+            
+            # Create video record if successful
+            if result.success:
+                video_data = {
+                    "video_id": video_path.stem,
+                    "title": metadata.get("title", ""),
+                    "description": metadata.get("caption", ""),
+                    "platform": platform,
+                    "platform_video_id": result.video_id or "",
+                    "platform_url": result.url or "",
+                    "duration": 0.0,
+                    "file_path": str(video_path)
+                }
+                
+                response = requests.post(
+                    f"{self.analytics_url}/videos",
+                    json=video_data,
+                    timeout=5
+                )
+                
+                if response.status_code == 200:
+                    print(f"[📊] Tracked {platform.upper()} upload to analytics")
+        except Exception as e:
+            # Silently fail - analytics is optional
+            pass
+    
+    def _notify_discord(self, platform: str, video_path: Path, metadata: Dict[str, str], result: UploadResult):
+        """Send Discord webhook notifications for successful uploads."""
+        if not result.success:
+            return  # Only notify on successful uploads
+        
+        try:
+            from .config_manager import ConfigManager
+            config_manager = ConfigManager()
+            
+            # Get webhooks configured for this platform
+            webhooks = config_manager.get_discord_webhooks_for_platform(platform)
+            
+            if not webhooks:
+                return  # No webhooks configured for this platform
+            
+            # Get video title from metadata
+            title = metadata.get("title", f"Video from {video_path.stem}")
+            
+            # Send notification to each webhook
+            for webhook in webhooks:
+                webhook_url = webhook.get("url")
+                if webhook_url:
+                    self.discord_service.send_upload_notification(
+                        webhook_url=webhook_url,
+                        platform=platform,
+                        title=title,
+                        video_url=result.url
+                    )
+                    
+        except Exception as e:
+            # Log error but don't fail the upload process
+            print(f"[Discord] Error sending notification: {e}")
     
     def _validate_metadata(self, metadata: Dict[str, str], video_path: Path) -> Dict[str, str]:
         """Validate and ensure metadata has required fields with fallbacks."""
@@ -106,8 +192,14 @@ class UploadManager:
             else:
                 results[platform] = UploadResult(platform, False, error="Unknown platform")
             
-            # Print result
+            # Track upload to analytics server (delivery notification)
             result = results[platform]
+            self._track_upload_analytics(platform, video_path, validated_metadata, result)
+            
+            # Send Discord notifications for successful uploads
+            self._notify_discord(platform, video_path, validated_metadata, result)
+            
+            # Print result
             if result.success:
                 print(f"[SUCCESS] {platform.upper()}: Success! Video ID: {result.video_id}")
                 if result.url:

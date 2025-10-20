@@ -1,14 +1,29 @@
 """FastAPI server for video analytics API"""
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query, Path
+import json
+import asyncio
+import bcrypt
+from fastapi import FastAPI, HTTPException, Query, Path, Request, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import List, Optional, Dict, Any
-from datetime import datetime
-from pydantic import BaseModel
+from datetime import datetime, timedelta
+from pydantic import BaseModel, EmailStr
+from sse_starlette.sse import EventSourceResponse
+from jose import JWTError, jwt
 
-from analytics.database import AnalyticsDatabase, VideoRecord, VideoMetrics
-from analytics.channel_discovery import ChannelDiscovery, ChannelStats
+from analytics.database import AnalyticsDatabase, VideoRecord, VideoMetrics, User
+from analytics.oauth_channel_discovery import OAuthChannelDiscovery, ChannelStats
+from content_creation.watcher_events import get_event_emitter
+from content_creation.obs_detector import OBSDetector
+
+# JWT settings
+SECRET_KEY = "your-secret-key-change-this-in-production"  # TODO: Move to environment variable
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+
+security = HTTPBearer()
 
 # Pydantic models for API
 class VideoCreateRequest(BaseModel):
@@ -87,6 +102,28 @@ class AggregatedStatsResponse(BaseModel):
     platform_breakdown: Dict[str, int]
     channel_stats: List[ChannelStatsResponse]
 
+# Auth models
+class UserRegisterRequest(BaseModel):
+    username: str
+    email: EmailStr
+    password: str
+
+class UserLoginRequest(BaseModel):
+    username: str
+    password: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: Dict[str, Any]
+
+class UserResponse(BaseModel):
+    id: int
+    username: str
+    email: str
+    role: str
+    created_at: datetime
+
 # Initialize FastAPI app
 app = FastAPI(
     title="Video Analytics API",
@@ -105,7 +142,298 @@ app.add_middleware(
 
 # Initialize database and channel discovery
 db = AnalyticsDatabase()
-channel_discovery = ChannelDiscovery(db)
+channel_discovery = OAuthChannelDiscovery(db)
+
+# Auth helper functions
+def hash_password(password: str) -> str:
+    """Hash a password using bcrypt"""
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+def verify_password(password: str, hashed: str) -> bool:
+    """Verify a password against a hash"""
+    return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+
+def create_access_token(data: dict) -> str:
+    """Create a JWT access token"""
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> User:
+    """Dependency to get the current authenticated user"""
+    try:
+        token = credentials.credentials
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: int = int(payload.get("sub"))
+        if user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Could not validate credentials",
+            )
+    except JWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+        )
+    
+    user = db.get_user_by_id(user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+        )
+    
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is inactive",
+        )
+    
+    return user
+
+# Auth endpoints
+@app.post("/auth/register", response_model=TokenResponse)
+async def register(user_data: UserRegisterRequest):
+    """Register a new user"""
+    # Check if username exists
+    if db.get_user_by_username(user_data.username):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username already exists"
+        )
+    
+    # Check if email exists
+    if db.get_user_by_email(user_data.email):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already exists"
+        )
+    
+    # Hash password and create user
+    password_hash = hash_password(user_data.password)
+    user_id = db.create_user(
+        username=user_data.username,
+        email=user_data.email,
+        password_hash=password_hash
+    )
+    
+    # Get the created user
+    user = db.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create user"
+        )
+    
+    # Create access token
+    access_token = create_access_token({"sub": str(user.id)})
+    
+    return TokenResponse(
+        access_token=access_token,
+        user={
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "role": user.role
+        }
+    )
+
+@app.post("/auth/login", response_model=TokenResponse)
+async def login(login_data: UserLoginRequest):
+    """Login and get access token"""
+    # Get user by username
+    user = db.get_user_by_username(login_data.username)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid username or password"
+        )
+    
+    # Verify password
+    if not verify_password(login_data.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid username or password"
+        )
+    
+    # Check if user is active
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User account is inactive"
+        )
+    
+    # Create access token
+    access_token = create_access_token({"sub": str(user.id)})
+    
+    return TokenResponse(
+        access_token=access_token,
+        user={
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "role": user.role
+        }
+    )
+
+@app.get("/auth/me", response_model=UserResponse)
+async def get_current_user_info(current_user: User = Depends(get_current_user)):
+    """Get current user information"""
+    return UserResponse(
+        id=current_user.id,
+        username=current_user.username,
+        email=current_user.email,
+        role=current_user.role,
+        created_at=current_user.created_at
+    )
+
+# Settings endpoints
+@app.post("/api/metrics/collect")
+async def collect_metrics(current_user: User = Depends(get_current_user)):
+    """Trigger fresh metrics collection from all platforms"""
+    try:
+        from analytics.metrics_collector import InstagramMetricsCollector, YouTubeMetricsCollector, TikTokMetricsCollector
+        import os
+        
+        # Get access tokens from environment
+        instagram_token = os.getenv("INSTAGRAM_ACCESS_TOKEN")
+        youtube_token = os.getenv("YOUTUBE_ACCESS_TOKEN") 
+        tiktok_token = os.getenv("TIKTOK_ACCESS_TOKEN")
+        
+        collectors = []
+        if instagram_token:
+            collectors.append(InstagramMetricsCollector(instagram_token, use_graph_api=True))
+        if youtube_token:
+            collectors.append(YouTubeMetricsCollector(youtube_token))
+        if tiktok_token:
+            collectors.append(TikTokMetricsCollector(tiktok_token))
+        
+        if not collectors:
+            return {"message": "No platform tokens configured", "collected": 0}
+        
+        # Get all videos that need metrics collection
+        videos = db.list_videos(limit=1000)
+        
+        collected_count = 0
+        for video in videos:
+            if not video.platform_video_id:
+                continue
+                
+            # Find appropriate collector
+            collector = None
+            for c in collectors:
+                if c.platform == video.platform:
+                    collector = c
+                    break
+            
+            if collector:
+                try:
+                    metrics = await collector.collect_metrics(video.video_id, video.platform_video_id)
+                    if metrics:
+                        db.add_metrics(metrics)
+                        collected_count += 1
+                except Exception as e:
+                    print(f"Error collecting metrics for {video.video_id}: {e}")
+                    continue
+        
+        return {
+            "message": f"Successfully collected metrics for {collected_count} videos",
+            "collected": collected_count
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Metrics collection failed: {str(e)}")
+
+@app.get("/api/settings", response_model=Dict[str, Any])
+async def get_settings(current_user: User = Depends(get_current_user)):
+    """Get current user settings and system configuration"""
+    # Load config from ConfigManager
+    import sys
+    import os
+    # Add src directory to path if not already there
+    src_path = os.path.join(os.path.dirname(__file__), '..')
+    if src_path not in sys.path:
+        sys.path.insert(0, src_path)
+    
+    from managers.config_manager import ConfigManager
+    config_manager = ConfigManager()
+    config = config_manager.get_config()
+    
+    return {
+        "upload_platforms": {
+            "instagram": config.upload_to_instagram,
+            "youtube": config.upload_to_youtube,
+            "tiktok": config.upload_to_tiktok
+        },
+        "directories": {
+            "watch_dir": config.watch_dir,
+            "processed_dir": config.processed_dir
+        },
+        "scheduling": {
+            "auto_schedule": config.auto_schedule,
+            "schedule_spacing_hours": config.schedule_spacing_hours,
+            "default_post_time_offset": config.default_post_time_offset
+        },
+        "user": {
+            "username": current_user.username,
+            "email": current_user.email,
+            "role": current_user.role
+        }
+    }
+
+@app.patch("/api/settings", response_model=Dict[str, Any])
+async def update_settings(
+    settings_data: Dict[str, Any],
+    current_user: User = Depends(get_current_user)
+):
+    """Update user settings"""
+    import sys
+    import os
+    # Add src directory to path if not already there
+    src_path = os.path.join(os.path.dirname(__file__), '..')
+    if src_path not in sys.path:
+        sys.path.insert(0, src_path)
+    
+    from managers.config_manager import ConfigManager
+    config_manager = ConfigManager()
+    
+    # Update upload platforms
+    if "upload_platforms" in settings_data:
+        for platform, enabled in settings_data["upload_platforms"].items():
+            config_manager.set_platform_upload(platform, enabled)
+    
+    # Update directories
+    if "directories" in settings_data:
+        if "watch_dir" in settings_data["directories"]:
+            config_manager.set_watch_dir(settings_data["directories"]["watch_dir"])
+        if "processed_dir" in settings_data["directories"]:
+            config_manager.set_processed_dir(settings_data["directories"]["processed_dir"])
+    
+    # Update scheduling
+    if "scheduling" in settings_data:
+        config_manager.update_scheduling_config(settings_data["scheduling"])
+    
+    return {"message": "Settings updated successfully"}
+
+@app.post("/api/settings/change-password")
+async def change_password(
+    password_data: Dict[str, str],
+    current_user: User = Depends(get_current_user)
+):
+    """Change user password"""
+    current_password = password_data.get("current_password")
+    new_password = password_data.get("new_password")
+    
+    # Verify current password
+    if not verify_password(current_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    
+    # Update password
+    new_hash = hash_password(new_password)
+    db.update_user_password(current_user.id, new_hash)
+    
+    return {"message": "Password changed successfully"}
 
 # Video endpoints
 @app.post("/videos", response_model=VideoResponse)
@@ -147,6 +475,18 @@ async def create_video(video_data: VideoCreateRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/videos/top-with-metrics")
+async def get_top_videos_with_metrics(
+    limit: int = Query(10, description="Number of top videos to return"),
+    platform: Optional[str] = Query(None, description="Filter by platform")
+):
+    """Get top videos with their latest metrics in a single efficient query"""
+    try:
+        videos = db.get_top_videos_with_metrics(limit=limit, platform=platform)
+        return videos
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/videos/{video_id}", response_model=VideoResponse)
 async def get_video(video_id: str = Path(..., description="Video ID")):
@@ -376,11 +716,23 @@ async def get_aggregated_channel_stats():
         for platform, stat in stats.items():
             most_popular = None
             if stat.most_popular_video:
+                # Include metrics if available
+                vid = stat.most_popular_video
+                metrics = getattr(vid, 'metrics', None)
+                views = metrics.get("views", 0) if metrics else 0
+                likes = metrics.get("likes", 0) if metrics else 0
+                comments = metrics.get("comments", 0) if metrics else 0
+                shares = metrics.get("shares", 0) if metrics else 0
+                
                 most_popular = {
-                    "platform": stat.most_popular_video.platform,
-                    "platform_video_id": stat.most_popular_video.platform_video_id,
-                    "title": stat.most_popular_video.title,
-                    "platform_url": stat.most_popular_video.platform_url
+                    "platform": vid.platform,
+                    "platform_video_id": vid.platform_video_id,
+                    "title": vid.title,
+                    "platform_url": vid.platform_url,
+                    "views": views,
+                    "likes": likes,
+                    "comments": comments,
+                    "shares": shares
                 }
             
             channel_stats.append(ChannelStatsResponse(
@@ -418,6 +770,1092 @@ async def get_total_views():
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# Watcher Activity Endpoints
+@app.get("/api/watcher/stream")
+async def watcher_stream(request: Request):
+    """
+    Server-Sent Events endpoint for real-time watcher activity.
+    Streams events as they occur during video processing.
+    """
+    event_emitter = get_event_emitter()
+    
+    async def event_generator():
+        try:
+            while True:
+                # Check if client disconnected
+                if await request.is_disconnected():
+                    break
+                
+                # Get next event from queue (non-blocking with timeout)
+                event = event_emitter.get_next_event(timeout=1.0)
+                
+                if event:
+                    # Convert event to dict and send as SSE
+                    yield {
+                        "event": "message",
+                        "data": json.dumps(event.to_dict())
+                    }
+                
+                # Small delay to prevent busy waiting
+                await asyncio.sleep(0.1)
+                
+        except Exception as e:
+            print(f"SSE error: {e}")
+    
+    return EventSourceResponse(event_generator())
+
+
+@app.get("/api/watcher/history")
+async def get_watcher_history():
+    """
+    Get historical watcher events (last 100).
+    Returns array of event objects with timestamps.
+    """
+    try:
+        event_emitter = get_event_emitter()
+        history = event_emitter.get_history()
+        
+        return {
+            "events": history,
+            "count": len(history)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/watcher/status")
+async def get_watcher_status():
+    """
+    Get current watcher status.
+    Returns: idle, watching, or processing
+    """
+    try:
+        event_emitter = get_event_emitter()
+        status = event_emitter.get_status()
+        
+        return {
+            "status": status,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/watcher/clear-history")
+async def clear_watcher_history():
+    """Clear all watcher event history."""
+    try:
+        event_emitter = get_event_emitter()
+        event_emitter.clear_history()
+        
+        return {
+            "success": True,
+            "message": "History cleared"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/obs/status")
+async def get_obs_status():
+    """Get OBS Studio detection status and replay buffer path."""
+    try:
+        detector = OBSDetector()
+        info = detector.get_obs_info()
+        
+        return {
+            "obs_running": info['obs_running'],
+            "obs_installed": info['obs_installed'],
+            "config_dir": info['config_dir'],
+            "active_profile": info['active_profile'],
+            "replay_buffer_path": info['replay_buffer_path'],
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Schedule Management Endpoints
+
+class SchedulePostRequest(BaseModel):
+    video_path: str
+    metadata: Dict[str, Any]
+    platforms: List[str]
+    scheduled_time: Optional[datetime] = None
+
+
+@app.get("/api/schedule/upcoming")
+async def get_upcoming_schedule(hours: int = Query(24, ge=1, le=168)):
+    """Get scheduled posts for the next N hours."""
+    try:
+        db = AnalyticsDatabase()
+        posts = db.get_upcoming_schedule(hours=hours)
+        
+        return {
+            "posts": [
+                {
+                    "id": post.id,
+                    "video_path": post.video_path,
+                    "metadata": json.loads(post.metadata_json),
+                    "platforms": post.platforms.split(","),
+                    "scheduled_time": post.scheduled_time.isoformat() if post.scheduled_time else None,
+                    "status": post.status,
+                    "created_at": post.created_at.isoformat() if post.created_at else None,
+                    "processed_at": post.processed_at.isoformat() if post.processed_at else None,
+                    "error_message": post.error_message,
+                    "retry_count": post.retry_count
+                }
+                for post in posts
+            ],
+            "count": len(posts)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/schedule/post/{post_id}")
+async def get_scheduled_post(post_id: int):
+    """Get a specific scheduled post by ID."""
+    try:
+        db = AnalyticsDatabase()
+        post = db.get_scheduled_post(post_id)
+        
+        if not post:
+            raise HTTPException(status_code=404, detail="Post not found")
+        
+        return {
+            "id": post.id,
+            "video_path": post.video_path,
+            "metadata": json.loads(post.metadata_json),
+            "platforms": post.platforms.split(","),
+            "scheduled_time": post.scheduled_time.isoformat() if post.scheduled_time else None,
+            "status": post.status,
+            "created_at": post.created_at.isoformat() if post.created_at else None,
+            "processed_at": post.processed_at.isoformat() if post.processed_at else None,
+            "error_message": post.error_message,
+            "retry_count": post.retry_count
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/schedule/post")
+async def create_scheduled_post(request: SchedulePostRequest):
+    """Manually add a video to the schedule."""
+    try:
+        from scheduling.scheduler import schedule_video
+        
+        # Schedule the video
+        scheduled_time = schedule_video(
+            video_path=request.video_path,
+            metadata=request.metadata,
+            platforms=request.platforms
+        )
+        
+        return {
+            "success": True,
+            "scheduled_time": scheduled_time.isoformat(),
+            "message": f"Video scheduled for {scheduled_time.strftime('%I:%M %p on %B %d')}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/schedule/post/{post_id}/force")
+async def force_post_now(post_id: int):
+    """Immediately post a scheduled video."""
+    try:
+        from scheduling.scheduler import force_post_now as force_post
+        
+        success = force_post(post_id)
+        
+        if not success:
+            raise HTTPException(status_code=400, detail="Failed to force post")
+        
+        return {
+            "success": True,
+            "message": "Post will be processed immediately"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/schedule/post/{post_id}")
+async def cancel_scheduled_post(post_id: int):
+    """Cancel/delete a scheduled post."""
+    try:
+        db = AnalyticsDatabase()
+        success = db.cancel_scheduled_post(post_id)
+        
+        if not success:
+            raise HTTPException(status_code=400, detail="Failed to cancel post or post not found")
+        
+        return {
+            "success": True,
+            "message": "Post cancelled successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/schedule/post/{post_id}")
+async def reschedule_post(post_id: int, new_time: datetime):
+    """Change the scheduled time for a post."""
+    try:
+        db = AnalyticsDatabase()
+        success = db.reschedule_post(post_id, new_time)
+        
+        if not success:
+            raise HTTPException(status_code=400, detail="Failed to reschedule post")
+        
+        return {
+            "success": True,
+            "new_time": new_time.isoformat(),
+            "message": f"Post rescheduled to {new_time.strftime('%I:%M %p on %B %d')}"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Discord Webhook Integration Endpoints
+
+class DiscordWebhookCreateRequest(BaseModel):
+    name: str
+    url: str
+    platforms: List[str]
+
+class DiscordWebhookUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    url: Optional[str] = None
+    platforms: Optional[List[str]] = None
+
+class DiscordWebhookTestRequest(BaseModel):
+    webhook_url: str
+
+# AI Template Endpoints
+
+class TemplateCreateRequest(BaseModel):
+    name: str
+    prompt_text: str
+    is_active: bool = False
+
+
+class TemplateUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    prompt_text: Optional[str] = None
+
+
+class TestPromptRequest(BaseModel):
+    prompt_text: str
+    filename: str
+    game_context: str = "gaming"
+
+
+@app.get("/api/ai/templates")
+async def get_prompt_templates():
+    """List all prompt templates."""
+    try:
+        db = AnalyticsDatabase()
+        templates = db.list_prompt_templates()
+        
+        return {
+            "templates": [
+                {
+                    "id": t.id,
+                    "name": t.name,
+                    "prompt_text": t.prompt_text,
+                    "is_active": t.is_active,
+                    "created_at": t.created_at.isoformat() if t.created_at else None,
+                    "updated_at": t.updated_at.isoformat() if t.updated_at else None
+                }
+                for t in templates
+            ],
+            "count": len(templates)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/ai/templates/active")
+async def get_active_template():
+    """Get the currently active template."""
+    try:
+        db = AnalyticsDatabase()
+        template = db.get_active_prompt_template()
+        
+        if not template:
+            return {"template": None, "message": "No active template"}
+        
+        return {
+            "template": {
+                "id": template.id,
+                "name": template.name,
+                "prompt_text": template.prompt_text,
+                "is_active": template.is_active,
+                "created_at": template.created_at.isoformat() if template.created_at else None,
+                "updated_at": template.updated_at.isoformat() if template.updated_at else None
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ai/templates")
+async def create_template(request: TemplateCreateRequest):
+    """Create a new prompt template."""
+    try:
+        from analytics.database import AIPromptTemplate
+        
+        db = AnalyticsDatabase()
+        template = AIPromptTemplate(
+            name=request.name,
+            prompt_text=request.prompt_text,
+            is_active=request.is_active,
+            created_at=datetime.now(),
+            updated_at=datetime.now()
+        )
+        
+        # If setting as active, this will deactivate others
+        template_id = db.add_prompt_template(template)
+        
+        if request.is_active:
+            db.activate_prompt_template(template_id)
+        
+        return {
+            "success": True,
+            "template_id": template_id,
+            "message": "Template created successfully"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/ai/templates/{template_id}")
+async def update_template(template_id: int, request: TemplateUpdateRequest):
+    """Update an existing template."""
+    try:
+        db = AnalyticsDatabase()
+        success = db.update_prompt_template(
+            template_id=template_id,
+            name=request.name,
+            prompt_text=request.prompt_text
+        )
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Template not found")
+        
+        return {
+            "success": True,
+            "message": "Template updated successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/ai/templates/{template_id}")
+async def delete_template(template_id: int):
+    """Delete a template."""
+    try:
+        db = AnalyticsDatabase()
+        success = db.delete_prompt_template(template_id)
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Template not found")
+        
+        return {
+            "success": True,
+            "message": "Template deleted successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ai/templates/{template_id}/activate")
+async def activate_template(template_id: int):
+    """Set a template as active (deactivates all others)."""
+    try:
+        db = AnalyticsDatabase()
+        success = db.activate_prompt_template(template_id)
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Template not found")
+        
+        return {
+            "success": True,
+            "message": "Template activated successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ai/test-prompt")
+async def test_prompt(request: TestPromptRequest):
+    """Test a prompt with sample filename and return generated metadata."""
+    try:
+        from managers.ai_manager import AIManager
+        
+        # Create AI manager
+        ai_manager = AIManager()
+        
+        # Temporarily use the provided prompt by creating a test template
+        # In a real implementation, you'd inject the prompt directly into generation
+        original_method = ai_manager._generate_metadata_local
+        
+        def temp_generate(filename: str, game_context: str):
+            # Use the test prompt
+            prompt = request.prompt_text.replace("{filename}", filename).replace("{game_context}", game_context)
+            
+            completion = ai_manager.client.chat.completions.create(
+                model=ai_manager.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant that generates social media metadata. Always return valid JSON."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                response_format={"type": "json_object"}
+            )
+            
+            response_text = completion.choices[0].message.content
+            return json.loads(response_text)
+        
+        ai_manager._generate_metadata_local = temp_generate
+        
+        # Generate metadata
+        metadata = ai_manager.generate_metadata(request.filename, request.game_context)
+        
+        # Restore original method
+        ai_manager._generate_metadata_local = original_method
+        
+        return {
+            "success": True,
+            "metadata": metadata
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Discord Webhook Management Endpoints
+
+@app.get("/api/integrations/discord")
+async def list_discord_webhooks(current_user: User = Depends(get_current_user)):
+    """List all Discord webhook configurations."""
+    try:
+        import sys
+        import os
+        # Add src directory to path if not already there
+        src_path = os.path.join(os.path.dirname(__file__), '..')
+        if src_path not in sys.path:
+            sys.path.insert(0, src_path)
+        
+        from managers.config_manager import ConfigManager
+        config_manager = ConfigManager()
+        webhooks = config_manager.list_discord_webhooks()
+        
+        return {
+            "webhooks": webhooks,
+            "count": len(webhooks)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/integrations/discord")
+async def create_discord_webhook(
+    request: DiscordWebhookCreateRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """Create a new Discord webhook configuration."""
+    try:
+        import sys
+        import os
+        # Add src directory to path if not already there
+        src_path = os.path.join(os.path.dirname(__file__), '..')
+        if src_path not in sys.path:
+            sys.path.insert(0, src_path)
+        
+        from managers.config_manager import ConfigManager
+        config_manager = ConfigManager()
+        
+        webhook_id = config_manager.add_discord_webhook(
+            name=request.name,
+            url=request.url,
+            platforms=request.platforms
+        )
+        
+        return {
+            "success": True,
+            "webhook_id": webhook_id,
+            "message": "Discord webhook created successfully"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/integrations/discord/{webhook_id}")
+async def update_discord_webhook(
+    webhook_id: str,
+    request: DiscordWebhookUpdateRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """Update an existing Discord webhook configuration."""
+    try:
+        import sys
+        import os
+        # Add src directory to path if not already there
+        src_path = os.path.join(os.path.dirname(__file__), '..')
+        if src_path not in sys.path:
+            sys.path.insert(0, src_path)
+        
+        from managers.config_manager import ConfigManager
+        config_manager = ConfigManager()
+        
+        success = config_manager.update_discord_webhook(
+            webhook_id=webhook_id,
+            name=request.name,
+            url=request.url,
+            platforms=request.platforms
+        )
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Webhook not found")
+        
+        return {
+            "success": True,
+            "message": "Discord webhook updated successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/integrations/discord/{webhook_id}")
+async def delete_discord_webhook(
+    webhook_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Delete a Discord webhook configuration."""
+    try:
+        import sys
+        import os
+        # Add src directory to path if not already there
+        src_path = os.path.join(os.path.dirname(__file__), '..')
+        if src_path not in sys.path:
+            sys.path.insert(0, src_path)
+        
+        from managers.config_manager import ConfigManager
+        config_manager = ConfigManager()
+        
+        success = config_manager.remove_discord_webhook(webhook_id)
+        
+        if not success:
+            raise HTTPException(status_code=404, detail="Webhook not found")
+        
+        return {
+            "success": True,
+            "message": "Discord webhook deleted successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/integrations/discord/test")
+async def test_discord_webhook(
+    request: DiscordWebhookTestRequest,
+    current_user: User = Depends(get_current_user)
+):
+    """Test a Discord webhook with a sample message."""
+    try:
+        import sys
+        import os
+        # Add src directory to path if not already there
+        src_path = os.path.join(os.path.dirname(__file__), '..')
+        if src_path not in sys.path:
+            sys.path.insert(0, src_path)
+        
+        from managers.discord_service import DiscordWebhookService
+        
+        discord_service = DiscordWebhookService()
+        success = discord_service.test_webhook(request.webhook_url)
+        
+        if success:
+            return {
+                "success": True,
+                "message": "Webhook test successful - check your Discord channel!"
+            }
+        else:
+            return {
+                "success": False,
+                "message": "Webhook test failed - check the URL and permissions"
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Failed Uploads Management Endpoints
+
+@app.get("/api/uploads/failed")
+async def list_failed_uploads(current_user: User = Depends(get_current_user)):
+    """List all failed uploads available for retry."""
+    try:
+        import sys
+        import os
+        # Add src directory to path if not already there
+        src_path = os.path.join(os.path.dirname(__file__), '..')
+        if src_path not in sys.path:
+            sys.path.insert(0, src_path)
+        
+        from managers.upload_manager import UploadManager
+        from managers.oauth_manager import OAuthManager
+        
+        # Initialize managers
+        oauth_manager = OAuthManager()
+        upload_manager = UploadManager(oauth_manager)
+        
+        # Get failed uploads
+        failed_uploads = upload_manager.list_failed_uploads()
+        
+        # Format for API response
+        uploads_list = []
+        for key, upload in failed_uploads.items():
+            uploads_list.append({
+                "key": key,
+                "video_path": upload.get("video_path", ""),
+                "platform": upload.get("platform", ""),
+                "metadata": upload.get("metadata", {}),
+                "error": upload.get("error", ""),
+                "timestamp": upload.get("timestamp", ""),
+                "retry_count": upload.get("retry_count", 0)
+            })
+        
+        return {
+            "failed_uploads": uploads_list,
+            "count": len(uploads_list)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/uploads/retry/{upload_key}")
+async def retry_failed_upload(
+    upload_key: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Retry a specific failed upload."""
+    try:
+        import sys
+        import os
+        # Add src directory to path if not already there
+        src_path = os.path.join(os.path.dirname(__file__), '..')
+        if src_path not in sys.path:
+            sys.path.insert(0, src_path)
+        
+        from managers.upload_manager import UploadManager
+        from managers.oauth_manager import OAuthManager
+        
+        # Initialize managers
+        oauth_manager = OAuthManager()
+        upload_manager = UploadManager(oauth_manager)
+        
+        # Parse upload key (format: video_name_platform)
+        parts = upload_key.rsplit('_', 1)
+        if len(parts) != 2:
+            raise HTTPException(status_code=400, detail="Invalid upload key format")
+        
+        video_name, platform = parts
+        
+        # Retry the upload
+        result = upload_manager.retry_failed_upload(video_name, platform)
+        
+        return {
+            "success": result.success,
+            "platform": result.platform,
+            "video_id": result.video_id,
+            "url": result.url,
+            "error": result.error,
+            "message": f"Successfully retried {platform.upper()} upload" if result.success else f"Retry failed: {result.error}"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/uploads/failed/{upload_key}")
+async def remove_failed_upload(
+    upload_key: str,
+    current_user: User = Depends(get_current_user)
+):
+    """Remove a failed upload from the retry queue."""
+    try:
+        import sys
+        import os
+        import json
+        from pathlib import Path
+        
+        # Add src directory to path if not already there
+        src_path = os.path.join(os.path.dirname(__file__), '..')
+        if src_path not in sys.path:
+            sys.path.insert(0, src_path)
+        
+        # Load failed uploads
+        failed_uploads_file = Path.home() / ".content_creation" / "failed_uploads.json"
+        
+        if not failed_uploads_file.exists():
+            raise HTTPException(status_code=404, detail="No failed uploads found")
+        
+        with open(failed_uploads_file, 'r') as f:
+            failed_uploads = json.load(f)
+        
+        # Remove the upload
+        if upload_key not in failed_uploads:
+            raise HTTPException(status_code=404, detail="Upload not found")
+        
+        del failed_uploads[upload_key]
+        
+        # Save updated list
+        with open(failed_uploads_file, 'w') as f:
+            json.dump(failed_uploads, f, indent=2)
+        
+        return {
+            "success": True,
+            "message": f"Removed {upload_key} from failed uploads"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/uploads/retry-all")
+async def retry_all_failed_uploads(
+    platforms: Optional[List[str]] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """Retry all failed uploads for specified platforms."""
+    try:
+        import sys
+        import os
+        # Add src directory to path if not already there
+        src_path = os.path.join(os.path.dirname(__file__), '..')
+        if src_path not in sys.path:
+            sys.path.insert(0, src_path)
+        
+        from managers.upload_manager import UploadManager
+        from managers.oauth_manager import OAuthManager
+        
+        # Initialize managers
+        oauth_manager = OAuthManager()
+        upload_manager = UploadManager(oauth_manager)
+        
+        # Retry all uploads
+        results = upload_manager.retry_all_failed_uploads(platforms=platforms)
+        
+        # Format results
+        successful = sum(1 for result in results.values() if result.success)
+        failed = len(results) - successful
+        
+        return {
+            "success": True,
+            "total": len(results),
+            "successful": successful,
+            "failed": failed,
+            "results": {
+                key: {
+                    "success": result.success,
+                    "platform": result.platform,
+                    "error": result.error
+                }
+                for key, result in results.items()
+            },
+            "message": f"Retry complete: {successful} successful, {failed} failed"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Missed Replays Management Endpoints
+
+def get_missed_replays():
+    """Find videos in watch dir not in processed or scheduled"""
+    import sys
+    import os
+    from pathlib import Path
+    
+    # Add src directory to path if not already there
+    src_path = os.path.join(os.path.dirname(__file__), '..')
+    if src_path not in sys.path:
+        sys.path.insert(0, src_path)
+    
+    from managers.config_manager import ConfigManager
+    
+    config_manager = ConfigManager()
+    config = config_manager.get_config()
+    watch_dir = Path(config.watch_dir)
+    processed_dir = Path(config.processed_dir)
+    
+    if not watch_dir.exists():
+        return []
+    
+    # Get all videos in watch directory
+    video_exts = config.video_extensions
+    watch_videos = [f for f in watch_dir.iterdir() 
+                    if f.is_file() and f.suffix.lower() in video_exts]
+    
+    # Get processed filenames and scheduled video paths
+    db = AnalyticsDatabase()
+    scheduled_posts = db.get_all_scheduled_posts()
+    scheduled_paths = set()
+    for post in scheduled_posts:
+        # Check both the direct path and the filename
+        scheduled_paths.add(post.video_path)
+        scheduled_paths.add(Path(post.video_path).name)
+    
+    processed_names = {f.name for f in processed_dir.iterdir() if f.is_file()}
+    
+    # Filter unprocessed
+    missed = []
+    for video in watch_videos:
+        # Check if video is not processed and not scheduled
+        if video.name not in processed_names and video.name not in scheduled_paths and str(video) not in scheduled_paths:
+            missed.append({
+                'filename': video.name,
+                'file_path': str(video),
+                'file_size': video.stat().st_size,
+                'modified_time': video.stat().st_mtime
+            })
+    
+    # Sort by modified time (newest first)
+    missed.sort(key=lambda x: x['modified_time'], reverse=True)
+    
+    return missed
+
+
+@app.get("/api/missed-replays")
+async def get_missed_replays_endpoint(current_user: User = Depends(get_current_user)):
+    """Get list of unprocessed videos in watch directory."""
+    try:
+        replays = get_missed_replays()
+        return {
+            "success": True,
+            "count": len(replays),
+            "replays": replays
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/schedule-replay")
+async def schedule_replay(
+    video_path: str,
+    scheduled_time: Optional[str] = None,
+    platforms: Optional[List[str]] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """Schedule a single missed replay for posting."""
+    try:
+        import sys
+        import os
+        from pathlib import Path
+        from datetime import datetime
+        
+        # Add src directory to path if not already there
+        src_path = os.path.join(os.path.dirname(__file__), '..')
+        if src_path not in sys.path:
+            sys.path.insert(0, src_path)
+        
+        from managers.config_manager import ConfigManager
+        from managers.ai_manager import AIManager
+        from content_creation.video_processor import VideoProcessor
+        from content_creation.clip_watcher import process_video_for_scheduling
+        from scheduling.scheduler import get_next_slot
+        
+        # Validate video path exists
+        video_file = Path(video_path)
+        if not video_file.exists():
+            raise HTTPException(status_code=404, detail="Video file not found")
+        
+        # Initialize managers
+        config_manager = ConfigManager()
+        ai_manager = AIManager()
+        video_processor = VideoProcessor()
+        
+        # Get platforms from config if not provided
+        if not platforms:
+            platforms = config_manager.get_upload_platforms()
+        
+        if not platforms:
+            raise HTTPException(status_code=400, detail="No platforms configured")
+        
+        # Process the video
+        processed_path, metadata = process_video_for_scheduling(
+            video_file, ai_manager, video_processor, config_manager
+        )
+        
+        # Determine scheduled time
+        db = AnalyticsDatabase()
+        if scheduled_time:
+            # Parse provided time
+            try:
+                scheduled_dt = datetime.fromisoformat(scheduled_time.replace('Z', '+00:00'))
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid datetime format")
+        else:
+            # Get next available slot
+            next_slots = [get_next_slot(platform, db) for platform in platforms]
+            scheduled_dt = max(next_slots)
+        
+        # Create scheduled post
+        from analytics.database import ScheduledPost
+        post = ScheduledPost(
+            video_path=str(processed_path),
+            metadata_json=json.dumps(metadata),
+            platforms=",".join(platforms),
+            scheduled_time=scheduled_dt,
+            status="pending",
+            created_at=datetime.now()
+        )
+        
+        post_id = db.add_scheduled_post(post)
+        
+        return {
+            "success": True,
+            "post_id": post_id,
+            "scheduled_time": scheduled_dt.isoformat(),
+            "video_path": str(processed_path),
+            "metadata": metadata
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/schedule-replays-batch")
+async def schedule_replays_batch(
+    video_paths: List[str],
+    platforms: Optional[List[str]] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """Schedule multiple missed replays at once, spaced 1 hour apart."""
+    try:
+        import sys
+        import os
+        from pathlib import Path
+        from datetime import datetime
+        
+        # Add src directory to path if not already there
+        src_path = os.path.join(os.path.dirname(__file__), '..')
+        if src_path not in sys.path:
+            sys.path.insert(0, src_path)
+        
+        from managers.config_manager import ConfigManager
+        from managers.ai_manager import AIManager
+        from content_creation.video_processor import VideoProcessor
+        from content_creation.clip_watcher import process_video_for_scheduling
+        from scheduling.scheduler import space_videos
+        
+        # Initialize managers
+        config_manager = ConfigManager()
+        ai_manager = AIManager()
+        video_processor = VideoProcessor()
+        
+        # Get platforms from config if not provided
+        if not platforms:
+            platforms = config_manager.get_upload_platforms()
+        
+        if not platforms:
+            raise HTTPException(status_code=400, detail="No platforms configured")
+        
+        # Get scheduled times for all videos (spaced 1 hour apart)
+        db = AnalyticsDatabase()
+        scheduled_times = space_videos(platforms, len(video_paths))
+        
+        results = []
+        
+        for i, video_path in enumerate(video_paths):
+            try:
+                video_file = Path(video_path)
+                if not video_file.exists():
+                    results.append({
+                        "video_path": video_path,
+                        "success": False,
+                        "error": "Video file not found"
+                    })
+                    continue
+                
+                # Process the video
+                processed_path, metadata = process_video_for_scheduling(
+                    video_file, ai_manager, video_processor, config_manager
+                )
+                
+                # Create scheduled post
+                from analytics.database import ScheduledPost
+                post = ScheduledPost(
+                    video_path=str(processed_path),
+                    metadata_json=json.dumps(metadata),
+                    platforms=",".join(platforms),
+                    scheduled_time=scheduled_times[i],
+                    status="pending",
+                    created_at=datetime.now()
+                )
+                
+                post_id = db.add_scheduled_post(post)
+                
+                results.append({
+                    "video_path": video_path,
+                    "success": True,
+                    "post_id": post_id,
+                    "scheduled_time": scheduled_times[i].isoformat(),
+                    "metadata": metadata
+                })
+            except Exception as e:
+                results.append({
+                    "video_path": video_path,
+                    "success": False,
+                    "error": str(e)
+                })
+        
+        successful = sum(1 for r in results if r["success"])
+        
+        return {
+            "success": True,
+            "total": len(results),
+            "successful": successful,
+            "failed": len(results) - successful,
+            "results": results
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/health")
 async def health_check():

@@ -43,6 +43,10 @@ interface RealApiResponse {
       platform_video_id: string;
       title: string;
       platform_url: string;
+      views: number;
+      likes: number;
+      comments: number;
+      shares: number;
     } | null;
   }>;
 }
@@ -75,30 +79,47 @@ const AnalyticsDashboard: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchAnalyticsData();
-    fetchTopVideos();
+    const loadData = async () => {
+      await fetchAnalyticsData();
+      await fetchTopVideos();
+    };
+    loadData();
+    
+    // Listen for refresh events from header
+    const handleRefresh = () => {
+      setLoading(true);
+      loadData();
+    };
+    
+    window.addEventListener('dashboard-refresh', handleRefresh);
+    return () => window.removeEventListener('dashboard-refresh', handleRefresh);
   }, []);
 
   const fetchTopVideos = async () => {
     try {
-      const response = await fetch('http://localhost:8000/videos?limit=10&order_by=created_at&order_direction=desc');
-      const videos = await response.json();
+      // Use the new efficient endpoint that gets top videos with metrics in a single query
+      const response = await fetch('http://localhost:8000/videos/top-with-metrics?limit=10');
+      const videosWithMetrics = await response.json();
       
-      if (data) {
-        setData(prevData => ({
-          ...prevData!,
-          topVideos: videos.map((video: any) => ({
-            id: video.video_id,
-            title: video.title,
-            platform: video.platform,
-            views: 0, // We'll need to get metrics separately
-            likes: 0,
-            comments: 0,
-            shares: 0,
-            url: video.platform_url
-          }))
-        }));
-      }
+      // Map to the expected format
+      const topVideos = videosWithMetrics.map((video: any) => ({
+        id: video.video_id,
+        title: video.title,
+        platform: video.platform,
+        views: video.views || 0,
+        likes: video.likes || 0,
+        comments: video.comments || 0,
+        shares: video.shares || 0,
+        url: video.platform_url
+      }));
+      
+      setData(prevData => {
+        if (!prevData) return null;
+        return {
+          ...prevData,
+          topVideos
+        };
+      });
     } catch (err) {
       console.error('Error fetching top videos:', err);
     }
@@ -142,10 +163,10 @@ const AnalyticsDashboard: React.FC = () => {
               id: getPlatformData('youtube').most_popular_video!.platform_video_id,
               title: getPlatformData('youtube').most_popular_video!.title,
               platform: 'YouTube',
-              views: 0,
-              likes: 0,
-              comments: 0,
-              shares: 0,
+              views: getPlatformData('youtube').most_popular_video!.views,
+              likes: getPlatformData('youtube').most_popular_video!.likes,
+              comments: getPlatformData('youtube').most_popular_video!.comments,
+              shares: getPlatformData('youtube').most_popular_video!.shares,
               url: getPlatformData('youtube').most_popular_video!.platform_url
             } : {
               id: '',
@@ -169,10 +190,10 @@ const AnalyticsDashboard: React.FC = () => {
               id: getPlatformData('instagram').most_popular_video!.platform_video_id,
               title: getPlatformData('instagram').most_popular_video!.title,
               platform: 'Instagram',
-              views: 0,
-              likes: 0,
-              comments: 0,
-              shares: 0,
+              views: getPlatformData('instagram').most_popular_video!.views,
+              likes: getPlatformData('instagram').most_popular_video!.likes,
+              comments: getPlatformData('instagram').most_popular_video!.comments,
+              shares: getPlatformData('instagram').most_popular_video!.shares,
               url: getPlatformData('instagram').most_popular_video!.platform_url
             } : {
               id: '',
@@ -196,10 +217,10 @@ const AnalyticsDashboard: React.FC = () => {
               id: getPlatformData('tiktok').most_popular_video!.platform_video_id,
               title: getPlatformData('tiktok').most_popular_video!.title,
               platform: 'TikTok',
-              views: 0,
-              likes: 0,
-              comments: 0,
-              shares: 0,
+              views: getPlatformData('tiktok').most_popular_video!.views,
+              likes: getPlatformData('tiktok').most_popular_video!.likes,
+              comments: getPlatformData('tiktok').most_popular_video!.comments,
+              shares: getPlatformData('tiktok').most_popular_video!.shares,
               url: getPlatformData('tiktok').most_popular_video!.platform_url
             } : {
               id: '',
@@ -258,10 +279,10 @@ const AnalyticsDashboard: React.FC = () => {
     <div className="container mx-auto px-6 py-8 space-y-8">
       {/* Header */}
       <div className="text-center mb-12">
-        <h1 className="text-6xl font-extrabold text-terminal-red mb-4 uppercase tracking-wider">
-          ANALYTICS DASHBOARD
+        <h1 className="text-5xl font-bold text-white mb-4 tracking-tight">
+          AIOCC Dashboard
         </h1>
-        <p className="text-xl text-gray-400 font-mono">
+        <p className="text-lg text-gray-400">
           Real-time performance metrics across all platforms
         </p>
       </div>

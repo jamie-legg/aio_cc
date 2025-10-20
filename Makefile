@@ -1,11 +1,14 @@
 # Content Creation Pipeline - Makefile
 # Common commands and aliases for development and operations
 
-.PHONY: help install dev test clean lint format sync-analytics start-analytics collect-metrics sync-channels generate-transition reset-youtube reset-instagram reset-tiktok
+.PHONY: help install dev test clean lint format sync-analytics start start-analytics collect-metrics sync-channels generate-transition reset-youtube reset-instagram reset-tiktok
 
 # Default target
 help:
 	@echo "Content Creation Pipeline - Available Commands:"
+	@echo ""
+	@echo "🚀 Quick Start:"
+	@echo "  start            Start all services (watcher + API + dashboard)"
 	@echo ""
 	@echo "📦 Setup & Installation:"
 	@echo "  install          Install dependencies"
@@ -65,6 +68,11 @@ install:
 dev:
 	@echo "🔧 Installing in development mode..."
 	uv pip install -e .[dev]
+
+# Quick Start
+start:
+	@echo "🚀 Starting all services..."
+	uv run python scripts/start_all.py
 
 # Content Creation
 generate-transition:
@@ -261,5 +269,3 @@ scheduler-once:
 sync: sync-channels
 metrics: collect-metrics
 views: total-views
-start: start-analytics
-test: test-sora

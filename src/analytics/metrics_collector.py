@@ -93,22 +93,38 @@ class YouTubeMetricsCollector(PlatformMetricsCollector):
         return None
 
 class InstagramMetricsCollector(PlatformMetricsCollector):
-    """Instagram metrics collector (requires Instagram Basic Display API)"""
+    """Instagram metrics collector (requires Instagram Graph API for Business/Creator accounts)"""
     
-    def __init__(self, access_token: str):
+    def __init__(self, access_token: str, use_graph_api: bool = True):
         super().__init__("instagram")
         self.access_token = access_token
-        self.base_url = "https://graph.instagram.com"
+        self.use_graph_api = use_graph_api
+        
+        if use_graph_api:
+            # Instagram Graph API (Business/Creator accounts - provides views)
+            self.base_url = "https://graph.facebook.com/v18.0"
+        else:
+            # Instagram Basic Display API (Personal accounts - no views)
+            self.base_url = "https://graph.instagram.com"
     
     async def collect_metrics(self, video_id: str, platform_video_id: str) -> Optional[VideoMetrics]:
-        """Collect Instagram metrics using the Instagram Basic Display API"""
+        """Collect Instagram metrics using the Instagram Graph API (Business) or Basic Display API"""
         try:
             async with aiohttp.ClientSession() as session:
-                url = f"{self.base_url}/{platform_video_id}"
-                params = {
-                    "fields": "media_type,media_url,permalink,timestamp,like_count,comments_count",
-                    "access_token": self.access_token
-                }
+                if self.use_graph_api:
+                    # Instagram Graph API for Business/Creator accounts
+                    url = f"{self.base_url}/{platform_video_id}"
+                    params = {
+                        "fields": "media_type,like_count,comments_count,video_views,reach,engagement,impressions",
+                        "access_token": self.access_token
+                    }
+                else:
+                    # Instagram Basic Display API (legacy)
+                    url = f"{self.base_url}/{platform_video_id}"
+                    params = {
+                        "fields": "media_type,media_url,permalink,timestamp,like_count,comments_count",
+                        "access_token": self.access_token
+                    }
                 
                 async with session.get(url, params=params) as response:
                     if response.status == 200:
@@ -117,26 +133,43 @@ class InstagramMetricsCollector(PlatformMetricsCollector):
                         likes = int(data.get("like_count", 0))
                         comments = int(data.get("comments_count", 0))
                         
-                        # Instagram doesn't provide view count in basic API
-                        views = 0
+                        # Get views (available in Graph API for Business/Creator accounts)
+                        if self.use_graph_api:
+                            # For videos, use video_views; for images, use reach or impressions
+                            media_type = data.get("media_type", "")
+                            if media_type in ["VIDEO", "REELS"]:
+                                views = int(data.get("video_views", 0))
+                            else:
+                                # For images/carousel, use reach or impressions as proxy for views
+                                views = int(data.get("reach", data.get("impressions", 0)))
+                        else:
+                            # Basic Display API doesn't provide views
+                            views = 0
                         
                         # Calculate engagement rate
                         engagement_rate = 0.0
                         if views > 0:
                             engagement_rate = (likes + comments) / views
+                        elif likes > 0 or comments > 0:
+                            # If we have engagement but no views, calculate based on reach
+                            reach = int(data.get("reach", 0))
+                            if reach > 0:
+                                engagement_rate = (likes + comments) / reach
                         
                         return VideoMetrics(
                             video_id=video_id,
                             platform=self.platform,
                             views=views,
                             likes=likes,
-                            shares=0,  # Not available in basic API
+                            shares=0,  # Instagram API doesn't provide share count
                             comments=comments,
                             engagement_rate=engagement_rate,
                             collected_at=datetime.now()
                         )
                     else:
                         logger.error(f"Instagram API error: {response.status}")
+                        error_text = await response.text()
+                        logger.error(f"Error details: {error_text}")
                         
         except Exception as e:
             logger.error(f"Error collecting Instagram metrics: {e}")
@@ -247,7 +280,8 @@ def create_metrics_collector_manager(
         manager.add_collector("youtube", YouTubeMetricsCollector(youtube_api_key))
     
     if instagram_access_token:
-        manager.add_collector("instagram", InstagramMetricsCollector(instagram_access_token))
+        # Use Graph API by default for Business/Creator accounts with view counts
+        manager.add_collector("instagram", InstagramMetricsCollector(instagram_access_token, use_graph_api=True))
     
     if tiktok_access_token:
         manager.add_collector("tiktok", TikTokMetricsCollector(tiktok_access_token))

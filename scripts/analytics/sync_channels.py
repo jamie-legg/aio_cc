@@ -8,7 +8,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Add the src directory to the path
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from analytics.database import AnalyticsDatabase
 from analytics.oauth_channel_discovery import OAuthChannelDiscovery

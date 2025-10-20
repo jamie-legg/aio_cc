@@ -51,6 +51,27 @@ class ScheduledPost:
     error_message: str = ""
     retry_count: int = 0
 
+@dataclass
+class AIPromptTemplate:
+    """AI prompt template record"""
+    id: Optional[int] = None
+    name: str = ""
+    prompt_text: str = ""
+    is_active: bool = False
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+@dataclass
+class User:
+    """User account record"""
+    id: Optional[int] = None
+    username: str = ""
+    email: str = ""
+    password_hash: str = ""
+    created_at: Optional[datetime] = None
+    is_active: bool = True
+    role: str = "user"  # user, admin
+
 class AnalyticsDatabase:
     """SQLite database manager for analytics"""
     
@@ -114,6 +135,31 @@ class AnalyticsDatabase:
                 )
             """)
             
+            # AI prompt templates table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ai_prompt_templates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT UNIQUE NOT NULL,
+                    prompt_text TEXT NOT NULL,
+                    is_active BOOLEAN DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Users table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT UNIQUE NOT NULL,
+                    email TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_active BOOLEAN DEFAULT 1,
+                    role TEXT DEFAULT 'user'
+                )
+            """)
+            
             # Create indexes for better performance
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_videos_platform ON videos(platform)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_videos_status ON videos(status)")
@@ -121,6 +167,9 @@ class AnalyticsDatabase:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_metrics_platform ON video_metrics(platform)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_status ON scheduled_posts(status)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_time ON scheduled_posts(scheduled_time)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_template_active ON ai_prompt_templates(is_active)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
             
             conn.commit()
     
@@ -222,6 +271,59 @@ class AnalyticsDatabase:
                 ))
             
             return videos
+    
+    def get_top_videos_with_metrics(self, limit: int = 10, platform: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get top videos with their latest metrics in a single query"""
+        query = """
+        SELECT 
+            v.id, v.video_id, v.title, v.description, v.platform, 
+            v.platform_url, v.created_at,
+            COALESCE(m.views, 0) as views,
+            COALESCE(m.likes, 0) as likes,
+            COALESCE(m.comments, 0) as comments,
+            COALESCE(m.shares, 0) as shares
+        FROM videos v
+        LEFT JOIN (
+            SELECT video_id, platform, views, likes, comments, shares
+            FROM video_metrics
+            WHERE (video_id, platform, collected_at) IN (
+                SELECT video_id, platform, MAX(collected_at)
+                FROM video_metrics
+                GROUP BY video_id, platform
+            )
+        ) m ON v.video_id = m.video_id AND v.platform = m.platform
+        """
+        
+        params = []
+        if platform:
+            query += " WHERE v.platform = ?"
+            params.append(platform)
+        
+        query += " ORDER BY COALESCE(m.views, 0) DESC LIMIT ?"
+        params.append(limit)
+        
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            
+            results = []
+            for row in rows:
+                results.append({
+                    'id': row[0],
+                    'video_id': row[1],
+                    'title': row[2],
+                    'description': row[3],
+                    'platform': row[4],
+                    'platform_url': row[5],
+                    'created_at': row[6],
+                    'views': row[7],
+                    'likes': row[8],
+                    'comments': row[9],
+                    'shares': row[10]
+                })
+            
+            return results
     
     def add_metrics(self, metrics: VideoMetrics) -> int:
         """Add video metrics to the database"""
@@ -407,10 +509,15 @@ class AnalyticsDatabase:
             rows = cursor.fetchall()
             posts = []
             for row in rows:
+                # Parse datetime strings from SQLite
+                scheduled_time = datetime.fromisoformat(row[4]) if row[4] else None
+                created_at = datetime.fromisoformat(row[6]) if row[6] else None
+                processed_at = datetime.fromisoformat(row[7]) if row[7] else None
+                
                 posts.append(ScheduledPost(
                     id=row[0], video_path=row[1], metadata_json=row[2], platforms=row[3],
-                    scheduled_time=row[4], status=row[5], created_at=row[6],
-                    processed_at=row[7], error_message=row[8], retry_count=row[9]
+                    scheduled_time=scheduled_time, status=row[5], created_at=created_at,
+                    processed_at=processed_at, error_message=row[8], retry_count=row[9]
                 ))
             
             return posts
@@ -461,10 +568,15 @@ class AnalyticsDatabase:
             
             posts = []
             for row in rows:
+                # Parse datetime strings from SQLite
+                scheduled_time = datetime.fromisoformat(row[4]) if row[4] else None
+                created_at = datetime.fromisoformat(row[6]) if row[6] else None
+                processed_at = datetime.fromisoformat(row[7]) if row[7] else None
+                
                 posts.append(ScheduledPost(
                     id=row[0], video_path=row[1], metadata_json=row[2], platforms=row[3],
-                    scheduled_time=row[4], status=row[5], created_at=row[6],
-                    processed_at=row[7], error_message=row[8], retry_count=row[9]
+                    scheduled_time=scheduled_time, status=row[5], created_at=created_at,
+                    processed_at=processed_at, error_message=row[8], retry_count=row[9]
                 ))
             
             return posts
@@ -492,9 +604,307 @@ class AnalyticsDatabase:
             row = cursor.fetchone()
             
             if row:
+                # Parse datetime strings from SQLite
+                scheduled_time = datetime.fromisoformat(row[4]) if row[4] else None
+                created_at = datetime.fromisoformat(row[6]) if row[6] else None
+                processed_at = datetime.fromisoformat(row[7]) if row[7] else None
+                
                 return ScheduledPost(
                     id=row[0], video_path=row[1], metadata_json=row[2], platforms=row[3],
-                    scheduled_time=row[4], status=row[5], created_at=row[6],
-                    processed_at=row[7], error_message=row[8], retry_count=row[9]
+                    scheduled_time=scheduled_time, status=row[5], created_at=created_at,
+                    processed_at=processed_at, error_message=row[8], retry_count=row[9]
                 )
             return None
+    
+    def get_pending_posts(self) -> List[ScheduledPost]:
+        """Get all pending scheduled posts"""
+        return self.list_scheduled_posts(status="pending", limit=1000)
+    
+    def get_all_scheduled_posts(self) -> List[ScheduledPost]:
+        """Get all scheduled posts regardless of status"""
+        return self.list_scheduled_posts(limit=10000)
+    
+    def get_posts_by_status(self, status: str, limit: int = 100) -> List[ScheduledPost]:
+        """Get posts filtered by status"""
+        return self.list_scheduled_posts(status=status, limit=limit)
+    
+    def get_upcoming_schedule(self, hours: int = 24) -> List[ScheduledPost]:
+        """Get scheduled posts for next N hours"""
+        from datetime import timedelta
+        now = datetime.now()
+        end_time = now + timedelta(hours=hours)
+        
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM scheduled_posts 
+                WHERE scheduled_time BETWEEN ? AND ?
+                AND status IN ('pending', 'processing')
+                ORDER BY scheduled_time ASC
+            """, (now.isoformat(), end_time.isoformat()))
+            rows = cursor.fetchall()
+            
+            posts = []
+            for row in rows:
+                # Parse datetime strings from SQLite
+                scheduled_time = datetime.fromisoformat(row[4]) if row[4] else None
+                created_at = datetime.fromisoformat(row[6]) if row[6] else None
+                processed_at = datetime.fromisoformat(row[7]) if row[7] else None
+                
+                posts.append(ScheduledPost(
+                    id=row[0], video_path=row[1], metadata_json=row[2], platforms=row[3],
+                    scheduled_time=scheduled_time, status=row[5], created_at=created_at,
+                    processed_at=processed_at, error_message=row[8], retry_count=row[9]
+                ))
+            
+            return posts
+    
+    def has_post_at_time(self, platform: str, scheduled_time: datetime) -> bool:
+        """Check if there's already a post scheduled for this platform at this time"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT COUNT(*) FROM scheduled_posts 
+                WHERE platforms LIKE ? 
+                AND scheduled_time = ?
+                AND status = 'pending'
+            """, (f"%{platform}%", scheduled_time))
+            count = cursor.fetchone()[0]
+            return count > 0
+    
+    def reschedule_post(self, post_id: int, new_time: datetime) -> bool:
+        """Update the scheduled time for a post"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE scheduled_posts 
+                SET scheduled_time = ?
+                WHERE id = ? AND status = 'pending'
+            """, (new_time, post_id))
+            conn.commit()
+            return cursor.rowcount > 0
+    
+    # AI Prompt Template Methods
+    
+    def add_prompt_template(self, template: AIPromptTemplate) -> int:
+        """Add a new AI prompt template"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO ai_prompt_templates (name, prompt_text, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (template.name, template.prompt_text, template.is_active, 
+                  template.created_at or datetime.now(), template.updated_at or datetime.now()))
+            conn.commit()
+            return cursor.lastrowid
+    
+    def get_prompt_template(self, template_id: int) -> Optional[AIPromptTemplate]:
+        """Get a specific prompt template by ID"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM ai_prompt_templates WHERE id = ?", (template_id,))
+            row = cursor.fetchone()
+            
+            if row:
+                # Parse datetime strings from SQLite
+                created_at = datetime.fromisoformat(row[4]) if row[4] else None
+                updated_at = datetime.fromisoformat(row[5]) if row[5] else None
+                
+                return AIPromptTemplate(
+                    id=row[0], name=row[1], prompt_text=row[2], is_active=bool(row[3]),
+                    created_at=created_at, updated_at=updated_at
+                )
+            return None
+    
+    def get_active_prompt_template(self) -> Optional[AIPromptTemplate]:
+        """Get the currently active prompt template"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM ai_prompt_templates WHERE is_active = 1 LIMIT 1")
+            row = cursor.fetchone()
+            
+            if row:
+                # Parse datetime strings from SQLite
+                created_at = datetime.fromisoformat(row[4]) if row[4] else None
+                updated_at = datetime.fromisoformat(row[5]) if row[5] else None
+                
+                return AIPromptTemplate(
+                    id=row[0], name=row[1], prompt_text=row[2], is_active=bool(row[3]),
+                    created_at=created_at, updated_at=updated_at
+                )
+            return None
+    
+    def list_prompt_templates(self) -> List[AIPromptTemplate]:
+        """List all prompt templates"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM ai_prompt_templates ORDER BY created_at DESC")
+            rows = cursor.fetchall()
+            
+            templates = []
+            for row in rows:
+                # Parse datetime strings from SQLite
+                created_at = datetime.fromisoformat(row[4]) if row[4] else None
+                updated_at = datetime.fromisoformat(row[5]) if row[5] else None
+                
+                templates.append(AIPromptTemplate(
+                    id=row[0], name=row[1], prompt_text=row[2], is_active=bool(row[3]),
+                    created_at=created_at, updated_at=updated_at
+                ))
+            
+            return templates
+    
+    def update_prompt_template(self, template_id: int, name: Optional[str] = None, 
+                              prompt_text: Optional[str] = None) -> bool:
+        """Update a prompt template"""
+        updates = []
+        params = []
+        
+        if name is not None:
+            updates.append("name = ?")
+            params.append(name)
+        
+        if prompt_text is not None:
+            updates.append("prompt_text = ?")
+            params.append(prompt_text)
+        
+        if not updates:
+            return False
+        
+        updates.append("updated_at = ?")
+        params.append(datetime.now())
+        params.append(template_id)
+        
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"""
+                UPDATE ai_prompt_templates 
+                SET {', '.join(updates)}
+                WHERE id = ?
+            """, params)
+            conn.commit()
+            return cursor.rowcount > 0
+    
+    def activate_prompt_template(self, template_id: int) -> bool:
+        """Set a template as active (deactivates all others)"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Deactivate all templates
+            cursor.execute("UPDATE ai_prompt_templates SET is_active = 0")
+            
+            # Activate the specified template
+            cursor.execute("UPDATE ai_prompt_templates SET is_active = 1 WHERE id = ?", (template_id,))
+            
+            conn.commit()
+            return cursor.rowcount > 0
+    
+    def delete_prompt_template(self, template_id: int) -> bool:
+        """Delete a prompt template"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM ai_prompt_templates WHERE id = ?", (template_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+    
+    # User management methods
+    def create_user(self, username: str, email: str, password_hash: str, role: str = "user") -> int:
+        """Create a new user"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO users (username, email, password_hash, role, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (username, email, password_hash, role, datetime.now()))
+            conn.commit()
+            return cursor.lastrowid
+    
+    def get_user_by_username(self, username: str) -> Optional[User]:
+        """Get user by username"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+            row = cursor.fetchone()
+            
+            if row:
+                return User(
+                    id=row[0], username=row[1], email=row[2], password_hash=row[3],
+                    created_at=datetime.fromisoformat(row[4]) if row[4] else None,
+                    is_active=bool(row[5]), role=row[6]
+                )
+            return None
+    
+    def update_user_password(self, user_id: int, password_hash: str) -> bool:
+        """Update user password"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (password_hash, user_id)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+    
+    def get_user_by_email(self, email: str) -> Optional[User]:
+        """Get user by email"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM users WHERE email = ?", (email,))
+            row = cursor.fetchone()
+            
+            if row:
+                return User(
+                    id=row[0], username=row[1], email=row[2], password_hash=row[3],
+                    created_at=datetime.fromisoformat(row[4]) if row[4] else None,
+                    is_active=bool(row[5]), role=row[6]
+                )
+            return None
+    
+    def get_user_by_id(self, user_id: int) -> Optional[User]:
+        """Get user by ID"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+            row = cursor.fetchone()
+            
+            if row:
+                return User(
+                    id=row[0], username=row[1], email=row[2], password_hash=row[3],
+                    created_at=datetime.fromisoformat(row[4]) if row[4] else None,
+                    is_active=bool(row[5]), role=row[6]
+                )
+            return None
+    
+    def update_user(self, user_id: int, **kwargs) -> bool:
+        """Update user fields"""
+        allowed_fields = ['username', 'email', 'password_hash', 'is_active', 'role']
+        updates = []
+        params = []
+        
+        for key, value in kwargs.items():
+            if key in allowed_fields and value is not None:
+                updates.append(f"{key} = ?")
+                params.append(value)
+        
+        if not updates:
+            return False
+        
+        params.append(user_id)
+        
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"""
+                UPDATE users 
+                SET {', '.join(updates)}
+                WHERE id = ?
+            """, params)
+            conn.commit()
+            return cursor.rowcount > 0
+    
+    def delete_user(self, user_id: int) -> bool:
+        """Delete a user"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            conn.commit()
+            return cursor.rowcount > 0

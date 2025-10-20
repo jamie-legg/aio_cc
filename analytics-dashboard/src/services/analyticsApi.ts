@@ -173,6 +173,14 @@ class AnalyticsApi {
     return this.request<{ message: string; synced_videos: number }>('/channels/sync');
   }
 
+  async getTopVideosWithMetrics(limit: number = 10, platform?: string): Promise<VideoStats[]> {
+    const params = new URLSearchParams({ limit: limit.toString() });
+    if (platform) {
+      params.append('platform', platform);
+    }
+    return this.request<VideoStats[]>(`/videos/top-with-metrics?${params}`);
+  }
+
   // Mock data for development when API is not available
   async getMockData(): Promise<AnalyticsSummary> {
     return new Promise((resolve) => {

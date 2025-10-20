@@ -2,8 +2,9 @@
 
 import json
 import os
+import uuid
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, asdict
 
 @dataclass
@@ -21,10 +22,33 @@ class Config:
     api_key: str = os.getenv("CONTENT_CREATION_API_KEY", "")
     use_backend_api: bool = os.getenv("USE_BACKEND_API", "false").lower() in ("true", "1", "yes", "on")
     
+    # Scheduling configuration
+    auto_schedule: bool = os.getenv("AUTO_SCHEDULE", "true").lower() in ("true", "1", "yes", "on")  # Enable auto-scheduling (vs immediate upload)
+    schedule_spacing_hours: int = 1  # Hours between posts on same platform
+    default_post_time_offset: int = 1  # Post N hours after processing
+    
+    # Discord webhook configuration
+    discord_webhooks: List[Dict[str, Any]] = None
+    
     def __post_init__(self):
         if self.video_extensions is None:
             # Include Windows-specific formats
             self.video_extensions = [".mov", ".mp4", ".avi", ".mkv", ".webm", ".wmv", ".flv", ".m4v"]
+        if self.discord_webhooks is None:
+            self.discord_webhooks = []
+        
+        # Load scheduling settings from environment if set
+        try:
+            if os.getenv("SCHEDULE_SPACING_HOURS"):
+                self.schedule_spacing_hours = int(os.getenv("SCHEDULE_SPACING_HOURS"))
+        except (ValueError, TypeError):
+            pass  # Keep default
+        
+        try:
+            if os.getenv("DEFAULT_POST_TIME_OFFSET"):
+                self.default_post_time_offset = int(os.getenv("DEFAULT_POST_TIME_OFFSET"))
+        except (ValueError, TypeError):
+            pass  # Keep default
 
 class ConfigManager:
     """Manages configuration settings for the content creation tool."""
@@ -58,6 +82,17 @@ class ConfigManager:
                     config.processed_dir = file_data.get("processed_dir", config.processed_dir)
                 if not os.getenv("VIDEO_EXTENSIONS"):
                     config.video_extensions = file_data.get("video_extensions", config.video_extensions)
+                
+                # Load Discord webhooks
+                config.discord_webhooks = file_data.get("discord_webhooks", [])
+                
+                # Load scheduling config (only if not set via env)
+                if not os.getenv("AUTO_SCHEDULE"):
+                    config.auto_schedule = file_data.get("auto_schedule", config.auto_schedule)
+                if not os.getenv("SCHEDULE_SPACING_HOURS"):
+                    config.schedule_spacing_hours = file_data.get("schedule_spacing_hours", config.schedule_spacing_hours)
+                if not os.getenv("DEFAULT_POST_TIME_OFFSET"):
+                    config.default_post_time_offset = file_data.get("default_post_time_offset", config.default_post_time_offset)
                     
             except Exception as e:
                 print(f"Error loading config: {e}")
@@ -139,6 +174,22 @@ class ConfigManager:
         self._save_config()
         status = "enabled" if enabled else "disabled"
         print(f"Upload to {platform.upper()} {status}")
+        return True
+    
+    def set_platform_upload(self, platform: str, enabled: bool) -> bool:
+        """Enable or disable uploads for a specific platform (alias for set_upload_platform)."""
+        return self.set_upload_platform(platform, enabled)
+    
+    def update_scheduling_config(self, scheduling_data: Dict[str, Any]) -> bool:
+        """Update scheduling configuration."""
+        if "auto_schedule" in scheduling_data:
+            self.config.auto_schedule = scheduling_data["auto_schedule"]
+        if "schedule_spacing_hours" in scheduling_data:
+            self.config.schedule_spacing_hours = scheduling_data["schedule_spacing_hours"]
+        if "default_post_time_offset" in scheduling_data:
+            self.config.default_post_time_offset = scheduling_data["default_post_time_offset"]
+        
+        self._save_config()
         return True
     
     def get_upload_platforms(self) -> list:
@@ -231,3 +282,65 @@ class ConfigManager:
         
         print("[SUCCESS] Configuration is valid")
         return True
+    
+    # Discord webhook management methods
+    def add_discord_webhook(self, name: str, url: str, platforms: List[str]) -> str:
+        """Add a new Discord webhook configuration."""
+        webhook_id = str(uuid.uuid4())
+        webhook = {
+            "id": webhook_id,
+            "name": name,
+            "url": url,
+            "platforms": platforms
+        }
+        
+        self.config.discord_webhooks.append(webhook)
+        self._save_config()
+        print(f"Added Discord webhook: {name} for platforms {', '.join(platforms)}")
+        return webhook_id
+    
+    def remove_discord_webhook(self, webhook_id: str) -> bool:
+        """Remove a Discord webhook by ID."""
+        initial_count = len(self.config.discord_webhooks)
+        self.config.discord_webhooks = [
+            webhook for webhook in self.config.discord_webhooks 
+            if webhook.get("id") != webhook_id
+        ]
+        
+        if len(self.config.discord_webhooks) < initial_count:
+            self._save_config()
+            print(f"Removed Discord webhook: {webhook_id}")
+            return True
+        else:
+            print(f"Discord webhook not found: {webhook_id}")
+            return False
+    
+    def list_discord_webhooks(self) -> List[Dict[str, Any]]:
+        """List all Discord webhook configurations."""
+        return self.config.discord_webhooks.copy()
+    
+    def update_discord_webhook(self, webhook_id: str, name: Optional[str] = None, 
+                             url: Optional[str] = None, platforms: Optional[List[str]] = None) -> bool:
+        """Update an existing Discord webhook configuration."""
+        for webhook in self.config.discord_webhooks:
+            if webhook.get("id") == webhook_id:
+                if name is not None:
+                    webhook["name"] = name
+                if url is not None:
+                    webhook["url"] = url
+                if platforms is not None:
+                    webhook["platforms"] = platforms
+                
+                self._save_config()
+                print(f"Updated Discord webhook: {webhook_id}")
+                return True
+        
+        print(f"Discord webhook not found: {webhook_id}")
+        return False
+    
+    def get_discord_webhooks_for_platform(self, platform: str) -> List[Dict[str, Any]]:
+        """Get all Discord webhooks that should be notified for a specific platform."""
+        return [
+            webhook for webhook in self.config.discord_webhooks
+            if platform in webhook.get("platforms", [])
+        ]

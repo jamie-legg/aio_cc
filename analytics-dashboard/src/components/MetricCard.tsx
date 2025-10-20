@@ -18,38 +18,22 @@ const MetricCard: React.FC<MetricCardProps> = ({ icon, value, label, color }) =>
 
   return (
     <motion.div
-      className="brutalist-box p-6 text-center group"
-      whileHover={{ scale: 1.05 }}
-      transition={{ duration: 0.2 }}
+      className="bg-gray-900 border border-gray-700 rounded-xl p-6 text-center hover:border-gray-500 transition-colors duration-300"
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5 }}
     >
-      <motion.div
-        className={`${colorClasses[color as keyof typeof colorClasses]} mb-4 flex justify-center`}
-        whileHover={{ rotate: 360 }}
-        transition={{ duration: 0.5 }}
-      >
+      <div className="text-gray-400 mb-4 flex justify-center">
         {icon}
-      </motion.div>
-      
-      <motion.div
-        className="metric-value text-4xl font-extrabold mb-2"
-        initial={{ scale: 0 }}
-        animate={{ scale: 1 }}
-        transition={{ duration: 0.5, type: "spring" }}
-      >
-        {value}
-      </motion.div>
-      
-      <div className="metric-label text-sm text-gray-400 uppercase tracking-wider">
-        {label}
       </div>
       
-      {/* Animated border effect */}
-      <motion.div
-        className="absolute inset-0 border-2 border-terminal-green opacity-0 group-hover:opacity-100"
-        initial={{ scale: 0.8 }}
-        whileHover={{ scale: 1 }}
-        transition={{ duration: 0.3 }}
-      />
+      <div className="text-4xl font-bold mb-2 text-white">
+        {value}
+      </div>
+      
+      <div className="text-sm text-gray-400 uppercase tracking-wider">
+        {label}
+      </div>
     </motion.div>
   );
 };

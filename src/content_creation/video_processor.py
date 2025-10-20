@@ -136,7 +136,8 @@ class VideoProcessor:
 
     def process_for_shorts(self, input_path: Path, output_path: Optional[Path] = None, 
                           audio_track: Optional[Path] = None, fade_duration: float = 1.0,
-                          watermark_path: Optional[Path] = None, outro_path: Optional[Path] = None) -> Path:
+                          watermark_path: Optional[Path] = None, outro_path: Optional[Path] = None,
+                          outro_duration: float = 3.0) -> Path:
         """
         Process video for YouTube Shorts (9:16 aspect ratio) with optional audio and fade effects.
         
@@ -147,6 +148,7 @@ class VideoProcessor:
             fade_duration: Duration of fade in/out in seconds (default: 1.0)
             watermark_path: Path to watermark image (optional)
             outro_path: Path to outro image (optional)
+            outro_duration: Duration of outro in seconds (default: 3.0)
             
         Returns:
             Path to processed video file
@@ -208,7 +210,7 @@ class VideoProcessor:
             
             # Process video with FFmpeg
             self._convert_to_9_16_with_audio(input_path, output_path, target_width, target_height, 
-                                           audio_track, fade_duration, duration, watermark_path, outro_path)
+                                           audio_track, fade_duration, duration, watermark_path, outro_path, outro_duration)
             
             print(f"[SUCCESS] Video processed successfully: {output_path.name}")
             return output_path
@@ -284,7 +286,8 @@ class VideoProcessor:
     def _convert_to_9_16_with_audio(self, input_path: Path, output_path: Path, target_width: int, 
                                    target_height: int, audio_track: Optional[Path] = None, 
                                    fade_duration: float = 1.0, video_duration: float = 0.0,
-                                   watermark_path: Optional[Path] = None, outro_path: Optional[Path] = None):
+                                   watermark_path: Optional[Path] = None, outro_path: Optional[Path] = None,
+                                   outro_duration: float = 3.0):
         """Convert video to 9:16 with optional audio mixing, fade effects, watermark, and outro."""
         try:
             # Build video filter
@@ -341,7 +344,7 @@ class VideoProcessor:
             if outro_path:
                 # Input 1 is watermark, input 2 is outro
                 outro_input = 2 if watermark_path else 1
-                outro_filter = f'[{outro_input}:v]scale={target_width}:{target_height}:force_original_aspect_ratio=increase,crop={target_width}:{target_height},fps=60,trim=duration=1[outro]'
+                outro_filter = f'[{outro_input}:v]scale={target_width}:{target_height}:force_original_aspect_ratio=increase,crop={target_width}:{target_height},fps=60,trim=duration={outro_duration}[outro]'
                 concat_filter = f'[v_main][outro]concat=n=2:v=1:a=0[v]'
                 filter_parts.extend([main_filter, outro_filter, concat_filter])
             else:
@@ -356,15 +359,30 @@ class VideoProcessor:
                 if outro_path:
                     audio_input += 1
                 if audio_filters:
-                    audio_filter = f'[0:a][{audio_input}:a]amix=inputs=2:duration=first:dropout_transition=2,{",".join(audio_filters)}[a]'
+                    audio_filter = f'[0:a][{audio_input}:a]amix=inputs=2:duration=first:dropout_transition=2,{",".join(audio_filters)}[a_temp]'
                 else:
-                    audio_filter = f'[0:a][{audio_input}:a]amix=inputs=2:duration=first:dropout_transition=2[a]'
-                filter_parts.append(audio_filter)
+                    audio_filter = f'[0:a][{audio_input}:a]amix=inputs=2:duration=first:dropout_transition=2[a_temp]'
+                
+                # If outro is present, pad audio with silence
+                if outro_path:
+                    filter_parts.append(audio_filter)
+                    filter_parts.append(f'[a_temp]apad=pad_dur={outro_duration}[a]')
+                else:
+                    filter_parts.append(audio_filter.replace('[a_temp]', '[a]'))
             else:
-                if audio_filters:
-                    filter_parts.append(f'[0:a]{",".join(audio_filters)}[a]')
+                # No audio track mixing
+                if outro_path:
+                    # Pad audio with silence for outro duration
+                    if audio_filters:
+                        filter_parts.append(f'[0:a]{",".join(audio_filters)},apad=pad_dur={outro_duration}[a]')
+                    else:
+                        filter_parts.append(f'[0:a]apad=pad_dur={outro_duration}[a]')
                 else:
-                    filter_parts.append('[0:a]acopy[a]')
+                    # No outro, just apply filters or copy
+                    if audio_filters:
+                        filter_parts.append(f'[0:a]{",".join(audio_filters)}[a]')
+                    else:
+                        filter_parts.append('[0:a]acopy[a]')
             
             # Apply filters
             if watermark_path or outro_path or audio_track:
@@ -385,6 +403,7 @@ class VideoProcessor:
                     str(output_path)
                 ])
                 print(f"[FFMPEG] Running FFmpeg: {' '.join(cmd)}")
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             else:
                 # Simple case - no complex filters needed
                 cmd.extend(['-vf', ','.join(video_filters)])

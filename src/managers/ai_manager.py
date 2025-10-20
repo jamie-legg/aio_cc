@@ -34,23 +34,25 @@ class AIManager:
                 self.api_client = APIClient(config.api_key, config.backend_api_url)
                 # Test connection
                 if self.api_client.test_connection():
-                    print("✅ Connected to backend API")
+                    print("[API] Connected to backend API")
                 else:
-                    print("⚠️  Backend API unreachable, will use local mode")
+                    print("[API] Backend API unreachable, will use local mode")
                     self.api_client = None
             except Exception as e:
-                print(f"⚠️  Failed to initialize backend API client: {e}")
+                print(f"[API] Failed to initialize backend API client: {e}")
                 self.api_client = None
     
-    def generate_metadata(self, filename: str, game_context: str = "gaming") -> Dict[str, Any]:
+    def generate_metadata(self, filename: str, game_context: str = "gaming", template_id: Optional[int] = None) -> Dict[str, Any]:
         """
         Generate social media metadata for a video file.
         
         Uses backend API if available, falls back to local OpenAI.
+        Supports custom prompt templates from database.
         
         Args:
             filename: Name of the video file
             game_context: Context about the game being played
+            template_id: Optional specific template ID to use
             
         Returns:
             Dictionary containing title, caption, and hashtags
@@ -58,10 +60,13 @@ class AIManager:
         # Try backend API first if available
         if self.api_client:
             try:
-                print("🔗 Using backend API for AI enrichment...")
+                print("[AI] Using backend API for AI enrichment...")
                 metadata = self.api_client.generate_metadata(filename, game_context)
                 
-                print(f"🤖 AI generated metadata for {filename}")
+                # Sanitize metadata to remove emojis and problematic characters
+                metadata = self._sanitize_metadata(metadata)
+                
+                print(f"[AI] AI generated metadata for {filename}")
                 print(f"   Title: {metadata.get('title', 'N/A')}")
                 print(f"   Caption: {metadata.get('caption', 'N/A')[:50]}...")
                 print(f"   Hashtags: {metadata.get('hashtags', 'N/A')}")
@@ -69,14 +74,14 @@ class AIManager:
                 return metadata
                 
             except Exception as e:
-                print(f"⚠️  Backend API failed, falling back to local OpenAI: {e}")
+                print(f"[AI] Backend API failed, falling back to local OpenAI: {e}")
         
-        # Fallback to local OpenAI
-        return self._generate_metadata_local(filename, game_context)
+        # Fallback to local OpenAI with template support
+        return self._generate_metadata_local(filename, game_context, template_id)
     
-    def _generate_metadata_local(self, filename: str, game_context: str = "gaming") -> Dict[str, Any]:
+    def _generate_metadata_local(self, filename: str, game_context: str = "gaming", template_id: Optional[int] = None) -> Dict[str, Any]:
         """
-        Generate metadata using local OpenAI client.
+        Generate metadata using local OpenAI client with optional template support.
         
         Args:
             filename: Name of the video file
@@ -86,10 +91,25 @@ class AIManager:
             Dictionary containing title, caption, and hashtags
         """
         try:
-            print("🏠 Using local OpenAI for AI enrichment...")
+            print("[AI] Using local OpenAI for AI enrichment...")
             
-            # Create the prompt based on game context
-            prompt = self._create_prompt(filename, game_context)
+            # Load template from database if available
+            from analytics.database import AnalyticsDatabase
+            
+            db = AnalyticsDatabase()
+            template = None
+            
+            if template_id:
+                template = db.get_prompt_template(template_id)
+            else:
+                template = db.get_active_prompt_template()
+            
+            # Create the prompt based on template or default
+            if template:
+                print(f"[AI] Using template: {template.name}")
+                prompt = template.prompt_text.replace("{filename}", filename).replace("{game_context}", game_context)
+            else:
+                prompt = self._create_prompt(filename, game_context)
             
             # Generate metadata using OpenAI
             response = self.client.chat.completions.create(
@@ -147,7 +167,10 @@ class AIManager:
             if isinstance(metadata.get('hashtags'), list):
                 metadata['hashtags'] = ' '.join(metadata['hashtags'])
             
-            print(f"🤖 AI generated metadata for {filename}")
+            # Sanitize metadata to remove emojis and problematic characters
+            metadata = self._sanitize_metadata(metadata)
+            
+            print(f"[AI] AI generated metadata for {filename}")
             print(f"   Title: {metadata.get('title', 'N/A')}")
             print(f"   Caption: {metadata.get('caption', 'N/A')[:50]}...")
             print(f"   Hashtags: {metadata.get('hashtags', 'N/A')}")
@@ -155,10 +178,10 @@ class AIManager:
             return metadata
             
         except json.JSONDecodeError as e:
-            print(f"❌ Failed to parse AI response as JSON: {e}")
+            print(f"[AI] Failed to parse AI response as JSON: {e}")
             return self._get_fallback_metadata(filename)
         except Exception as e:
-            print(f"❌ AI generation failed: {e}")
+            print(f"[AI] AI generation failed: {e}")
             return self._get_fallback_metadata(filename)
     
     def _create_prompt(self, filename: str, game_context: str) -> str:
@@ -186,11 +209,25 @@ The filename is "{filename}".
 
 Output JSON with keys: title, caption, hashtags."""
     
+    def _sanitize_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """Remove emojis and problematic characters from metadata."""
+        import re
+        
+        sanitized = {}
+        for key, value in metadata.items():
+            if isinstance(value, str):
+                # Remove emojis and other problematic Unicode characters
+                sanitized[key] = re.sub(r'[^\x00-\x7F]+', '', value).strip()
+            else:
+                sanitized[key] = value
+        
+        return sanitized
+    
     def _get_fallback_metadata(self, filename: str) -> Dict[str, Any]:
         """Get fallback metadata when AI generation fails."""
         return {
-            "title": f"epic gaming moment - {filename} 🎮",
-            "caption": "check out this insane play! we totally owned them 💀🥀",
+            "title": f"epic gaming moment - {filename}",
+            "caption": "check out this insane play! we totally owned them",
             "hashtags": "#gaming #shorts #epic #clutch"
         }
     

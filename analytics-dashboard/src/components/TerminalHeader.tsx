@@ -1,9 +1,14 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Terminal, Wifi, WifiOff, RefreshCw, Settings } from 'lucide-react';
 
 const TerminalHeader: React.FC = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [isConnected, setIsConnected] = useState(true);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [refreshStatus, setRefreshStatus] = useState<string>('');
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -22,46 +27,102 @@ const TerminalHeader: React.FC = () => {
     });
   };
 
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    setRefreshStatus('Collecting fresh metrics...');
+    
+    try {
+      // First trigger metrics collection
+      const token = localStorage.getItem('auth_token');
+      const response = await fetch('http://localhost:8000/api/metrics/collect', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        setRefreshStatus(`Updated ${result.collected} videos`);
+        console.log(`Metrics collection: ${result.message}`);
+      } else {
+        setRefreshStatus('Using cached data');
+        console.warn('Metrics collection failed, refreshing cached data');
+      }
+    } catch (error) {
+      setRefreshStatus('Using cached data');
+      console.warn('Metrics collection error:', error);
+    }
+    
+    // Emit custom refresh event that components can listen to
+    const event = new CustomEvent('dashboard-refresh');
+    window.dispatchEvent(event);
+    
+    // Keep spinning for visual feedback
+    setTimeout(() => {
+      setIsRefreshing(false);
+      setRefreshStatus('');
+    }, 2000); // Longer delay to show metrics collection
+  };
+
+  const handleSettingsClick = () => {
+    navigate('/dashboard/settings');
+  };
+
   return (
-    <header className="bg-terminal-card border-b-4 border-terminal-red px-6 py-4 sticky top-0 z-50 shadow-[0_4px_0px_#0080ff]">
+    <header className="bg-gray-900 sticky top-0 z-50 border-b border-gray-700 px-6 py-4">
       <div className="flex justify-between items-center max-w-7xl mx-auto">
         <div className="flex items-center gap-3">
-          <Terminal size={24} className="text-terminal-red" />
-          <span className="font-extrabold text-lg text-terminal-red uppercase tracking-wider">
-            ANALYTICS_TERMINAL_v2.0
+          <div className="text-white">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M3 3h18v18H3V3zm2 2v14h14V5H5z" fill="currentColor"/>
+              <path d="M7 9h10M7 12h10M7 15h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+            </svg>
+          </div>
+          <span className="font-semibold text-lg text-white tracking-tight">
+            AIOCC Dashboard
           </span>
         </div>
         
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-2">
             {isConnected ? (
-              <Wifi size={16} className="text-terminal-red" />
+              <Wifi size={16} className="text-green-500" />
             ) : (
-              <WifiOff size={16} className="text-terminal-red" />
+              <WifiOff size={16} className="text-red-500" />
             )}
-            <span className="text-xs font-bold uppercase tracking-wider text-terminal-red">
-              {isConnected ? 'CONNECTED' : 'DISCONNECTED'}
+            <span className="text-xs text-gray-400">
+              {isConnected ? 'Connected' : 'Disconnected'}
             </span>
           </div>
           
-          <div className="font-mono text-sm text-gray-400 font-bold">
+          <div className="text-sm text-gray-400">
             {formatTime(currentTime)}
           </div>
           
-          <div className="flex gap-3">
-            <button className="brutalist-button flex items-center gap-2">
-              <RefreshCw size={16} />
+          <div className="flex gap-2">
+            <button 
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="p-2 hover:bg-gray-800 rounded-lg transition-colors duration-200 disabled:opacity-50"
+              title={refreshStatus || "Refresh dashboard data"}
+            >
+              <RefreshCw 
+                size={16} 
+                className={`text-gray-400 ${isRefreshing ? 'animate-spin' : ''}`}
+              />
             </button>
             
-            <button className="brutalist-button flex items-center gap-2">
-              <Settings size={16} />
+            <button 
+              onClick={handleSettingsClick}
+              className="p-2 hover:bg-gray-800 rounded-lg transition-colors duration-200"
+              title="Open settings"
+            >
+              <Settings size={16} className="text-gray-400" />
             </button>
           </div>
         </div>
-      </div>
-      
-      <div className="h-1 bg-terminal-bg mt-3 rounded-sm overflow-hidden">
-        <div className="h-full bg-gradient-to-r from-terminal-red via-terminal-blue to-terminal-red rounded-sm w-full" />
       </div>
     </header>
   );

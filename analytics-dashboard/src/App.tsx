@@ -1,46 +1,52 @@
-import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+import ProtectedRoute from './components/ProtectedRoute';
+import LoginPage from './pages/LoginPage';
 import LandingPage from './pages/LandingPage';
 import PricingPage from './pages/PricingPage';
 import AnalyticsDashboard from './components/AnalyticsDashboard';
-import TerminalHeader from './components/TerminalHeader';
-import LoadingScreen from './components/LoadingScreen';
+import DashboardLayout from './components/DashboardLayout';
+import UploadsPage from './pages/UploadsPage';
+import AIConfigPage from './pages/AIConfigPage';
+import IntegrationsPage from './pages/IntegrationsPage';
+import SettingsPage from './pages/SettingsPage';
 
-function DashboardPage() {
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    // Simulate loading
-    const timer = setTimeout(() => {
-      setIsLoading(false);
-    }, 1000);
-
-    return () => clearTimeout(timer);
-  }, []);
-
-  if (isLoading) {
-    return <LoadingScreen />;
-  }
+function AppRoutes() {
+  const { login } = useAuth();
 
   return (
-    <div className="min-h-screen bg-terminal-bg text-terminal-red overflow-x-hidden">
-      <TerminalHeader />
-      <div className="relative z-10">
-        <AnalyticsDashboard />
-      </div>
-    </div>
+    <Routes>
+      <Route path="/" element={<LandingPage />} />
+      <Route path="/pricing" element={<PricingPage />} />
+      <Route path="/login" element={<LoginPage onLogin={login} />} />
+      <Route
+        path="/dashboard"
+        element={
+          <ProtectedRoute>
+            <DashboardLayout />
+          </ProtectedRoute>
+        }
+      >
+        <Route index element={<AnalyticsDashboard />} />
+        <Route path="uploads" element={<UploadsPage />} />
+        <Route path="ai-config" element={<AIConfigPage />} />
+        <Route path="integrations" element={<IntegrationsPage />} />
+        <Route path="settings" element={<SettingsPage />} />
+      </Route>
+      {/* Redirect unknown routes to dashboard */}
+      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+    </Routes>
   );
 }
 
 function App() {
   return (
-    <Router>
-      <Routes>
-        <Route path="/" element={<LandingPage />} />
-        <Route path="/pricing" element={<PricingPage />} />
-        <Route path="/dashboard" element={<DashboardPage />} />
-      </Routes>
-    </Router>
+    <AuthProvider>
+      <Router>
+        <AppRoutes />
+      </Router>
+    </AuthProvider>
   );
 }
 

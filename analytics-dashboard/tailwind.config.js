@@ -17,6 +17,18 @@ export default {
         'terminal-yellow': '#ffff00',
         'terminal-bg': '#0a0a0a',
         'terminal-card': '#1a1a1a',
+        gray: {
+          400: '#9ca3af',
+          500: '#6b7280',
+          600: '#4b5563',
+        },
+        red: {
+          500: '#ef4444',
+        },
+        pink: {
+          500: '#ec4899',
+        },
+        black: '#000000',
       },
       boxShadow: {
         'brutalist': '8px 8px 0px #ff0040, 16px 16px 0px #0080ff, 24px 24px 0px #ff0040',

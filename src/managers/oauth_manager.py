@@ -100,7 +100,7 @@ class OAuthManager:
             f"https://api.instagram.com/oauth/authorize"
             f"?client_id={client_id}"
             f"&redirect_uri={redirect_uri}"
-            f"&scope=instagram_business_basic,instagram_business_content_publish"
+            f"&scope=instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights"
             f"&response_type=code"
         )
         
@@ -183,20 +183,41 @@ class OAuthManager:
         # Check if we have valid credentials
         creds = None
         token_file = self.credentials_dir / "youtube_token.json"
+        needs_reauth = False
         
         if token_file.exists():
-            creds = Credentials.from_authorized_user_file(str(token_file), SCOPES)
+            # Read the actual scopes from the token file
+            import json
+            with open(token_file, 'r') as f:
+                token_data = json.load(f)
+                actual_scopes = token_data.get('scopes', [])
+            
+            # Check if we have all required scopes
+            missing_scopes = set(SCOPES) - set(actual_scopes)
+            if missing_scopes:
+                print(f"⚠️  Token missing required scopes:")
+                for scope in missing_scopes:
+                    print(f"   - {scope}")
+                print(f"   Re-authenticating to get all permissions...")
+                needs_reauth = True
+            else:
+                # Load existing credentials
+                creds = Credentials.from_authorized_user_file(str(token_file), SCOPES)
         
         # If there are no (valid) credentials available, let the user log in
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
+        if not creds or not creds.valid or needs_reauth:
+            if creds and creds.expired and creds.refresh_token and not needs_reauth:
                 creds.refresh(Request())
             else:
+                print("🔓 Opening browser for YouTube authorization...")
+                print("   Please approve ALL permissions when prompted!")
                 creds = flow.run_local_server(port=0)
             
             # Save the credentials for the next run
             with open(token_file, 'w') as token:
                 token.write(creds.to_json())
+            
+            print(f"✅ Token saved with {len(creds.scopes)} scopes")
         
         # Store credentials in our format
         self.credentials["youtube"] = OAuthCredentials(
@@ -420,7 +441,12 @@ class OAuthManager:
             print("YouTube client secrets file not found for token refresh")
             return False
         
-        SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
+        # MUST use ALL scopes, not just upload!
+        SCOPES = [
+            'https://www.googleapis.com/auth/youtube.readonly',
+            'https://www.googleapis.com/auth/youtube.force-ssl',
+            'https://www.googleapis.com/auth/youtube.upload'
+        ]
         
         try:
             # Load existing credentials from the token file (Google's format)

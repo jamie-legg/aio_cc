@@ -23,7 +23,7 @@ class ChannelVideo:
     duration: float
     platform_url: str
     thumbnail_url: str = ""
-    _metrics: Optional[Dict[str, Any]] = None  # Store raw metrics data
+    metrics: Optional[Dict[str, Any]] = None  # Store raw metrics data
 
 @dataclass
 class ChannelStats:
@@ -52,18 +52,31 @@ class OAuthChannelDiscovery:
         
         try:
             # Get YouTube service using OAuth credentials
+            # Load directly from youtube_token.json to ensure we have all scopes
             from google.oauth2.credentials import Credentials
             from googleapiclient.discovery import build
+            from pathlib import Path
+            import os
             
-            creds = self.oauth_manager.get_credentials("youtube")
-            if not creds:
+            # Try to load from token file directly (has all scopes)
+            token_file = Path.home() / ".content_creation" / "youtube_token.json"
+            
+            if not token_file.exists():
+                logger.error("YouTube token file not found")
                 return []
             
+            # Required scopes
+            SCOPES = [
+                'https://www.googleapis.com/auth/youtube.readonly',
+                'https://www.googleapis.com/auth/youtube.force-ssl',
+                'https://www.googleapis.com/auth/youtube.upload'
+            ]
+            
+            # Load credentials from token file
+            creds = Credentials.from_authorized_user_file(str(token_file), SCOPES)
+            
             # Create YouTube service
-            youtube = build('youtube', 'v3', credentials=Credentials(
-                token=creds.access_token,
-                refresh_token=creds.refresh_token
-            ))
+            youtube = build('youtube', 'v3', credentials=creds)
             
             # Get channel info
             channel_response = youtube.channels().list(
@@ -104,10 +117,22 @@ class OAuthChannelDiscovery:
                 for video in video_response['items']:
                     snippet = video['snippet']
                     content_details = video['contentDetails']
-                    statistics = video['statistics']
+                    statistics = video.get('statistics', {})
                     
                     # Parse duration
                     duration = self._parse_youtube_duration(content_details['duration'])
+                    
+                    # Only include YouTube Shorts (60 seconds or less)
+                    if duration > 60:
+                        logger.debug(f"⏭️  Skipping long-form video: {snippet['title'][:50]}... ({duration}s)")
+                        continue
+                    
+                    # Extract statistics
+                    views = int(statistics.get('viewCount', 0))
+                    likes = int(statistics.get('likeCount', 0))
+                    comments = int(statistics.get('commentCount', 0))
+                    
+                    logger.info(f"✅ YouTube Short: {snippet['title'][:50]}... - {views:,} views, {likes:,} likes ({duration}s)")
                     
                     videos.append(ChannelVideo(
                         platform="youtube",
@@ -117,7 +142,13 @@ class OAuthChannelDiscovery:
                         published_at=datetime.fromisoformat(snippet['publishedAt'].replace('Z', '+00:00')),
                         duration=duration,
                         platform_url=f"https://youtube.com/watch?v={video['id']}",
-                        thumbnail_url=snippet['thumbnails'].get('high', {}).get('url', '')
+                        thumbnail_url=snippet['thumbnails'].get('high', {}).get('url', ''),
+                        metrics={
+                            "views": views,
+                            "likes": likes,
+                            "comments": comments,
+                            "shares": 0  # YouTube doesn't provide share count
+                        }
                     ))
                 
                 next_page_token = playlist_response.get('nextPageToken')
@@ -154,7 +185,7 @@ class OAuthChannelDiscovery:
         return float(total_seconds)
     
     async def discover_instagram_videos(self, max_results: int = 50) -> List[ChannelVideo]:
-        """Discover videos from authenticated Instagram account"""
+        """Discover videos from authenticated Instagram account with metrics"""
         if not self.oauth_manager.is_authenticated("instagram"):
             logger.warning("Instagram not authenticated")
             return []
@@ -180,7 +211,7 @@ class OAuthChannelDiscovery:
                     user_data = await response.json()
                     user_id = user_data['id']
                 
-                # Get user's media
+                # Get user's media with basic info
                 media_url = f"https://graph.instagram.com/{user_id}/media"
                 params = {
                     "fields": "id,caption,media_type,media_url,permalink,timestamp,thumbnail_url",
@@ -198,19 +229,110 @@ class OAuthChannelDiscovery:
                     
                     for item in data.get("data", []):
                         # Only include video content
-                        if item.get("media_type") in ["VIDEO", "CAROUSEL_ALBUM"]:
+                        media_type = item.get("media_type")
+                        if media_type in ["VIDEO", "REELS", "CAROUSEL_ALBUM"]:
+                            media_id = item["id"]
+                            
+                            # Fetch insights for this media using Instagram Insights API
+                            # Reference: https://developers.facebook.com/docs/instagram-platform/insights/
+                            # Using graph.instagram.com for Instagram Business Login tokens
+                            media_metrics = {}
+                            try:
+                                # First get basic info (likes, comments) from the media object
+                                info_url = f"https://graph.instagram.com/{media_id}"
+                                info_params = {
+                                    "fields": "like_count,comments_count,media_type",
+                                    "access_token": creds.access_token
+                                }
+                                
+                                likes = 0
+                                comments = 0
+                                actual_media_type = media_type
+                                
+                                async with session.get(info_url, params=info_params) as info_response:
+                                    if info_response.status == 200:
+                                        info_data = await info_response.json()
+                                        likes = info_data.get("like_count", 0)
+                                        comments = info_data.get("comments_count", 0)
+                                        actual_media_type = info_data.get("media_type", media_type)
+                                
+                                # Now get insights (impressions, reach) using the Insights API
+                                # For videos/reels, we'll use impressions/plays as views
+                                # For images, we'll use reach
+                                insights_url = f"https://graph.instagram.com/{media_id}/insights"
+                                
+                                # Different metrics available based on media type
+                                # Instagram is very strict about which metrics work with which media types
+                                # SAFEST: reach, saved (work for most types)
+                                # REELS only: plays
+                                # FEED only: impressions
+                                
+                                # Start with the safest metrics that work for all types
+                                metrics = "reach,saved"
+                                
+                                insights_params = {
+                                    "metric": metrics,
+                                    "access_token": creds.access_token
+                                }
+                                
+                                views = 0
+                                async with session.get(insights_url, params=insights_params) as insights_response:
+                                    if insights_response.status == 200:
+                                        insights_data = await insights_response.json()
+                                        
+                                        # Parse insights data
+                                        for insight in insights_data.get("data", []):
+                                            insight_name = insight.get("name")
+                                            values = insight.get("values", [{}])
+                                            value = values[0].get("value", 0) if values else 0
+                                            
+                                            # Priority order: plays (for reels/videos), impressions, reach
+                                            if insight_name == "plays" and value > 0:
+                                                views = value
+                                            # Use impressions as the "view" metric if plays not available
+                                            elif insight_name == "impressions" and views == 0:
+                                                views = value
+                                            # Fall back to reach if neither plays nor impressions available
+                                            elif insight_name == "reach" and views == 0:
+                                                views = value
+                                        
+                                        logger.info(f"✅ Instagram insights for {media_id}: {views:,} views, {likes:,} likes, {comments:,} comments")
+                                    else:
+                                        logger.warning(f"⚠️  Could not fetch insights for {media_id}, status: {insights_response.status}")
+                                        error_text = await insights_response.text()
+                                        logger.warning(f"Error: {error_text}")
+                                        # If insights fail, at least we have likes/comments
+                                        logger.info(f"📊 Instagram basic metrics for {media_id}: {likes:,} likes, {comments:,} comments (no views)")
+                                
+                                media_metrics = {
+                                    "views": views,
+                                    "likes": likes,
+                                    "comments": comments,
+                                    "shares": 0  # Instagram doesn't provide share count via API
+                                }
+                                
+                            except Exception as e:
+                                logger.warning(f"❌ Error fetching metrics for {media_id}: {e}")
+                                media_metrics = {
+                                    "views": 0,
+                                    "likes": 0,
+                                    "comments": 0,
+                                    "shares": 0
+                                }
+                            
                             videos.append(ChannelVideo(
                                 platform="instagram",
-                                platform_video_id=item["id"],
+                                platform_video_id=media_id,
                                 title=item.get("caption", "")[:100] or "Instagram Video",
                                 description=item.get("caption", ""),
                                 published_at=datetime.fromisoformat(item["timestamp"].replace('Z', '+00:00')),
                                 duration=0,  # Instagram doesn't provide duration in basic API
                                 platform_url=item.get("permalink", ""),
-                                thumbnail_url=item.get("thumbnail_url", "")
+                                thumbnail_url=item.get("thumbnail_url", ""),
+                                metrics=media_metrics  # Store metrics for syncing
                             ))
                     
-                    logger.info(f"Discovered {len(videos)} Instagram videos")
+                    logger.info(f"Discovered {len(videos)} Instagram videos with metrics")
                     return videos
                     
         except Exception as e:
@@ -330,7 +452,7 @@ class OAuthChannelDiscovery:
                                     platform_url=item.get("share_url", ""),
                                     thumbnail_url=item.get("cover_image_url", ""),
                                     # Store metrics for later use
-                                    _metrics={
+                                    metrics={
                                         "views": item.get("view_count", 0),
                                         "likes": item.get("like_count", 0),
                                         "comments": item.get("comment_count", 0),
@@ -389,8 +511,8 @@ class OAuthChannelDiscovery:
             existing = self.db.get_video(video.platform_video_id)
             if existing:
                 # Update metrics if available
-                if video._metrics:
-                    await self._update_video_metrics(video.platform_video_id, video._metrics, video.platform)
+                if video.metrics:
+                    await self._update_video_metrics(video.platform_video_id, video.metrics, video.platform)
                 continue
             
             # Create video record
@@ -412,8 +534,8 @@ class OAuthChannelDiscovery:
                 logger.info(f"Synced video: {video.title} ({video.platform})")
                 
                 # Add metrics if available (e.g., from TikTok)
-                if video._metrics:
-                    await self._update_video_metrics(video.platform_video_id, video._metrics, video.platform)
+                if video.metrics:
+                    await self._update_video_metrics(video.platform_video_id, video.metrics, video.platform)
                     
             except Exception as e:
                 logger.error(f"Failed to sync video {video.platform_video_id}: {e}")
@@ -421,19 +543,30 @@ class OAuthChannelDiscovery:
     async def _update_video_metrics(self, video_id: str, metrics: Dict[str, Any], platform: str = "tiktok"):
         """Update video metrics in the database"""
         try:
+            views = metrics.get("views", 0)
+            likes = metrics.get("likes", 0)
+            comments = metrics.get("comments", 0)
+            shares = metrics.get("shares", 0)
+            
+            # Calculate engagement rate
+            engagement_rate = 0.0
+            if views > 0:
+                engagement_rate = (likes + comments) / views
+            
             # Create VideoMetrics record
             video_metrics = VideoMetrics(
                 video_id=video_id,
                 platform=platform,
-                views=metrics.get("views", 0),
-                likes=metrics.get("likes", 0),
-                shares=metrics.get("shares", 0),
-                comments=metrics.get("comments", 0),
+                views=views,
+                likes=likes,
+                shares=shares,
+                comments=comments,
+                engagement_rate=engagement_rate,
                 collected_at=datetime.now()
             )
             
             self.db.add_metrics(video_metrics)
-            logger.info(f"Updated metrics for video {video_id}: {metrics}")
+            logger.debug(f"Updated metrics for video {video_id}: {metrics} (engagement: {engagement_rate:.2%})")
             
         except Exception as e:
             logger.error(f"Failed to update metrics for video {video_id}: {e}")
@@ -461,8 +594,15 @@ class OAuthChannelDiscovery:
             engagement_rates = []
             most_popular_video = None
             max_views = 0
+            counted_videos = 0
             
             for video in videos:
+                # For YouTube, only count Shorts (60 seconds or less)
+                if platform == "youtube" and video.duration > 60:
+                    continue
+                
+                counted_videos += 1
+                
                 # Get latest metrics
                 metrics = self.db.get_latest_metrics(video.video_id, platform)
                 if metrics:
@@ -472,9 +612,15 @@ class OAuthChannelDiscovery:
                     total_comments += metrics.comments
                     engagement_rates.append(metrics.engagement_rate)
                     
-                    # Track most popular video
+                    # Track most popular video with metrics
                     if metrics.views > max_views:
                         max_views = metrics.views
+                        metrics_dict = {
+                            "views": metrics.views,
+                            "likes": metrics.likes,
+                            "comments": metrics.comments,
+                            "shares": metrics.shares
+                        }
                         most_popular_video = ChannelVideo(
                             platform=platform,
                             platform_video_id=video.platform_video_id,
@@ -482,14 +628,15 @@ class OAuthChannelDiscovery:
                             description=video.description,
                             published_at=video.created_at,
                             duration=video.duration,
-                            platform_url=video.platform_url
+                            platform_url=video.platform_url,
+                            metrics=metrics_dict
                         )
             
             avg_engagement = sum(engagement_rates) / len(engagement_rates) if engagement_rates else 0.0
             
             stats[platform] = ChannelStats(
                 platform=platform,
-                total_videos=len(videos),
+                total_videos=counted_videos,
                 total_views=total_views,
                 total_likes=total_likes,
                 total_shares=total_shares,
@@ -501,12 +648,16 @@ class OAuthChannelDiscovery:
         return stats
     
     def get_total_views_across_platforms(self) -> Tuple[int, Dict[str, int]]:
-        """Get total views across all platforms"""
+        """Get total views across all platforms (YouTube Shorts only)"""
         all_videos = self.db.list_videos(status="published")
         total_views = 0
         platform_views = {}
         
         for video in all_videos:
+            # For YouTube, only count Shorts (60 seconds or less)
+            if video.platform == "youtube" and video.duration > 60:
+                continue
+                
             metrics = self.db.get_latest_metrics(video.video_id, video.platform)
             if metrics:
                 views = metrics.views

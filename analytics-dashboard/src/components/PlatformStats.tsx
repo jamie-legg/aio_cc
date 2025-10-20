@@ -1,13 +1,12 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { TrendingUp, BarChart3, Heart, MessageCircle, Share2 } from 'lucide-react';
+import { TrendingUp, BarChart3, Heart, MessageCircle } from 'lucide-react';
 
 interface PlatformData {
   videos: number;
   views: number;
   likes: number;
   comments: number;
-  shares: number;
   engagementRate: number;
   mostPopular: {
     title: string;
@@ -33,7 +32,7 @@ const PlatformStats: React.FC<PlatformStatsProps> = ({ platform, icon, data, col
 
   return (
     <motion.div
-      className="brutalist-box p-6"
+      className="bg-gray-900 border border-gray-700 rounded-xl p-6 hover:border-gray-500 transition-colors duration-300"
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5 }}
@@ -48,7 +47,7 @@ const PlatformStats: React.FC<PlatformStatsProps> = ({ platform, icon, data, col
           </h3>
         </div>
         <div className="text-right">
-          <div className="text-3xl font-extrabold text-terminal-green">
+          <div className="text-3xl font-bold text-white">
             {data.views.toLocaleString()}
           </div>
           <div className="text-sm text-gray-400 uppercase tracking-wider">
@@ -60,21 +59,21 @@ const PlatformStats: React.FC<PlatformStatsProps> = ({ platform, icon, data, col
       <div className="grid grid-cols-2 gap-4 mb-6">
         <div className="text-center">
           <div className="flex items-center justify-center gap-2 mb-2">
-            <BarChart3 size={16} className="text-terminal-blue" />
+            <BarChart3 size={16} className="text-gray-400" />
             <span className="text-sm text-gray-400 uppercase tracking-wider">Videos</span>
           </div>
-          <div className="text-xl font-bold text-terminal-green">
+          <div className="text-xl font-bold text-white">
             {data.videos}
           </div>
         </div>
         
         <div className="text-center">
           <div className="flex items-center justify-center gap-2 mb-2">
-            <TrendingUp size={16} className="text-terminal-yellow" />
+            <TrendingUp size={16} className="text-gray-400" />
             <span className="text-sm text-gray-400 uppercase tracking-wider">Engagement</span>
           </div>
-          <div className="text-xl font-bold text-terminal-green">
-            {data.engagementRate.toFixed(1)}%
+          <div className="text-xl font-bold text-white">
+            {(data.engagementRate * 100).toFixed(1)}%
           </div>
         </div>
       </div>
@@ -82,38 +81,28 @@ const PlatformStats: React.FC<PlatformStatsProps> = ({ platform, icon, data, col
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Heart size={16} className="text-terminal-red" />
+            <Heart size={16} className="text-gray-400" />
             <span className="text-sm text-gray-400">Likes</span>
           </div>
-          <span className="font-mono text-terminal-green">
+          <span className="font-mono text-white">
             {data.likes.toLocaleString()}
           </span>
         </div>
         
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <MessageCircle size={16} className="text-terminal-blue" />
+            <MessageCircle size={16} className="text-gray-400" />
             <span className="text-sm text-gray-400">Comments</span>
           </div>
-          <span className="font-mono text-terminal-green">
+          <span className="font-mono text-white">
             {data.comments.toLocaleString()}
-          </span>
-        </div>
-        
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Share2 size={16} className="text-terminal-yellow" />
-            <span className="text-sm text-gray-400">Shares</span>
-          </div>
-          <span className="font-mono text-terminal-green">
-            {data.shares.toLocaleString()}
           </span>
         </div>
       </div>
 
       {data.mostPopular && (
         <motion.div
-          className="mt-6 p-4 bg-terminal-bg border border-terminal-green rounded"
+          className="mt-6 p-4 bg-gray-800 border border-gray-700 rounded-lg"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.3 }}
@@ -121,7 +110,7 @@ const PlatformStats: React.FC<PlatformStatsProps> = ({ platform, icon, data, col
           <div className="text-sm text-gray-400 uppercase tracking-wider mb-2">
             Most Popular
           </div>
-          <div className="text-sm text-terminal-green font-mono mb-2 truncate">
+          <div className="text-sm text-white font-mono mb-2 truncate">
             {data.mostPopular.title}
           </div>
           <div className="flex justify-between text-xs text-gray-400">
