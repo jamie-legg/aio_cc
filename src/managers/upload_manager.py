@@ -107,7 +107,10 @@ class UploadManager:
     def _notify_discord(self, platform: str, video_path: Path, metadata: Dict[str, str], result: UploadResult):
         """Send Discord webhook notifications for successful uploads."""
         if not result.success:
+            print(f"[Discord] Skipping notification for {platform} - upload failed")
             return  # Only notify on successful uploads
+        
+        print(f"[Discord] Attempting to send notification for {platform} upload")
         
         try:
             from .config_manager import ConfigManager
@@ -117,7 +120,10 @@ class UploadManager:
             webhooks = config_manager.get_discord_webhooks_for_platform(platform)
             
             if not webhooks:
+                print(f"[Discord] No webhooks configured for platform: {platform}")
                 return  # No webhooks configured for this platform
+            
+            print(f"[Discord] Found {len(webhooks)} webhook(s) for {platform}")
             
             # Get video title from metadata
             title = metadata.get("title", f"Video from {video_path.stem}")
@@ -125,17 +131,27 @@ class UploadManager:
             # Send notification to each webhook
             for webhook in webhooks:
                 webhook_url = webhook.get("url")
+                webhook_name = webhook.get("name", "Unnamed")
                 if webhook_url:
-                    self.discord_service.send_upload_notification(
+                    print(f"[Discord] Sending notification to webhook: {webhook_name}")
+                    success = self.discord_service.send_upload_notification(
                         webhook_url=webhook_url,
                         platform=platform,
                         title=title,
                         video_url=result.url
                     )
+                    if success:
+                        print(f"[Discord] Successfully sent notification to {webhook_name}")
+                    else:
+                        print(f"[Discord] Failed to send notification to {webhook_name}")
+                else:
+                    print(f"[Discord] No URL found for webhook: {webhook_name}")
                     
         except Exception as e:
             # Log error but don't fail the upload process
             print(f"[Discord] Error sending notification: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _validate_metadata(self, metadata: Dict[str, str], video_path: Path) -> Dict[str, str]:
         """Validate and ensure metadata has required fields with fallbacks."""

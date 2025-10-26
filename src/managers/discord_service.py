@@ -85,6 +85,8 @@ class DiscordWebhookService:
             return False
         except Exception as e:
             print(f"[Discord] Error sending notification: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def test_webhook(self, webhook_url: str) -> bool:

@@ -665,6 +665,45 @@ async def get_analytics_summary(
     summary = db.get_analytics_summary(platform, days)
     return AnalyticsSummaryResponse(**summary)
 
+@app.get("/analytics/trends")
+async def get_analytics_trends(
+    days: int = Query(30, description="Number of days to analyze")
+):
+    """Get analytics trends data for the specified number of days."""
+    
+    # Calculate date range
+    end_date = datetime.utcnow()
+    start_date = end_date - timedelta(days=days)
+    
+    # For now, return mock data since we don't have historical tracking
+    # In a real implementation, you would query historical data from the database
+    snapshots = []
+    
+    # Generate mock daily snapshots
+    for i in range(days):
+        snapshot_date = start_date + timedelta(days=i)
+        
+        # Mock data - in reality, you'd query actual historical data
+        snapshots.append({
+            "date": snapshot_date.isoformat(),
+            "total_views": max(0, 1000 + (i * 50) - (i % 7) * 100),  # Mock trending data
+            "total_likes": max(0, 50 + (i * 5) - (i % 5) * 10),
+            "total_comments": max(0, 20 + (i * 2) - (i % 3) * 5),
+            "total_shares": max(0, 5 + (i * 1) - (i % 7) * 2),
+            "total_videos": max(0, 1 + (i * 0.1)),
+            "platforms": {
+                "youtube": max(0, 500 + (i * 25) - (i % 7) * 50),
+                "instagram": max(0, 300 + (i * 15) - (i % 5) * 30),
+                "tiktok": max(0, 200 + (i * 10) - (i % 3) * 20)
+            }
+        })
+    
+    return {
+        "snapshots": snapshots,
+        "days": days,
+        "count": len(snapshots)
+    }
+
 @app.get("/channels/sync", response_model=Dict[str, Any])
 async def sync_channel_videos(
     youtube_channel_id: Optional[str] = Query(None, description="YouTube channel ID"),
@@ -766,6 +805,48 @@ async def get_total_views():
             "platform_breakdown": platform_breakdown,
             "formatted_total": f"{total_views:,}",
             "platforms": len(platform_breakdown)
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/channels/trends")
+async def get_channel_trends(days: int = Query(30, description="Number of days to analyze")):
+    """Get channel trends data for the specified number of days."""
+    try:
+        # Get real historical data from daily snapshots
+        db = AnalyticsDatabase()
+        snapshots = db.get_daily_snapshots(days=days)
+        
+        if not snapshots:
+            # If no historical data exists, return empty data
+            return {
+                "snapshots": [],
+                "days": days,
+                "count": 0
+            }
+        
+        # Convert snapshots to the expected format
+        formatted_snapshots = []
+        for snapshot in snapshots:
+            formatted_snapshots.append({
+                "date": snapshot.snapshot_date,
+                "total_views": snapshot.total_views,
+                "total_likes": snapshot.total_likes,
+                "total_comments": snapshot.total_comments,
+                "total_shares": snapshot.total_shares,
+                "total_videos": snapshot.total_videos,
+                "platforms": {
+                    "youtube": snapshot.youtube_views,
+                    "instagram": snapshot.instagram_views,
+                    "tiktok": snapshot.tiktok_views
+                }
+            })
+        
+        return {
+            "snapshots": formatted_snapshots,
+            "days": days,
+            "count": len(formatted_snapshots)
         }
         
     except Exception as e:
@@ -947,12 +1028,18 @@ async def create_scheduled_post(request: SchedulePostRequest):
     """Manually add a video to the schedule."""
     try:
         from scheduling.scheduler import schedule_video
+        from managers.config_manager import ConfigManager
+        
+        # Get configuration for spacing
+        config_manager = ConfigManager()
+        config = config_manager.get_config()
         
         # Schedule the video
         scheduled_time = schedule_video(
             video_path=request.video_path,
             metadata=request.metadata,
-            platforms=request.platforms
+            platforms=request.platforms,
+            spacing_hours=config.schedule_spacing_hours
         )
         
         return {
@@ -1024,6 +1111,83 @@ async def reschedule_post(post_id: int, new_time: datetime):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/api/schedule/post/{post_id}/metadata")
+async def update_post_metadata(
+    post_id: int,
+    title: Optional[str] = None,
+    caption: Optional[str] = None,
+    hashtags: Optional[str] = None,
+    platforms: Optional[List[str]] = None
+):
+    """Update metadata for a scheduled post."""
+    try:
+        db = AnalyticsDatabase()
+        
+        # Get current post
+        post = db.get_scheduled_post(post_id)
+        if not post:
+            raise HTTPException(status_code=404, detail="Post not found")
+        
+        # Parse existing metadata
+        metadata = json.loads(post.metadata_json) if post.metadata_json else {}
+        
+        # Update fields if provided
+        if title is not None:
+            metadata['title'] = title
+        if caption is not None:
+            metadata['caption'] = caption
+        if hashtags is not None:
+            metadata['hashtags'] = hashtags
+        
+        # Update metadata
+        success = db.update_scheduled_post_metadata(
+            post_id, 
+            json.dumps(metadata),
+            ",".join(platforms) if platforms else None
+        )
+        
+        if not success:
+            raise HTTPException(status_code=400, detail="Failed to update metadata")
+        
+        return {
+            "success": True,
+            "message": "Metadata updated successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/schedule/completed")
+async def get_completed_posts(days: int = Query(7, ge=1, le=30)):
+    """Get completed posts from the last N days."""
+    try:
+        db = AnalyticsDatabase()
+        # Get completed posts from the database
+        completed_posts = db.get_completed_posts(days=days)
+        
+        posts = []
+        for post in completed_posts:
+            posts.append({
+                "id": post.id,
+                "video_path": post.video_path,
+                "metadata": json.loads(post.metadata_json) if post.metadata_json else {},
+                "platforms": post.platforms.split(",") if post.platforms else [],
+                "scheduled_time": post.scheduled_time.isoformat() if post.scheduled_time else None,
+                "processed_at": post.processed_at.isoformat() if post.processed_at else None,
+                "status": post.status,
+                "created_at": post.created_at.isoformat()
+            })
+        
+        return {
+            "posts": posts,
+            "count": len(posts)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get completed posts: {str(e)}")
 
 
 # Discord Webhook Integration Endpoints
@@ -1417,7 +1581,7 @@ async def test_discord_webhook(
 # Failed Uploads Management Endpoints
 
 @app.get("/api/uploads/failed")
-async def list_failed_uploads(current_user: User = Depends(get_current_user)):
+async def list_failed_uploads():
     """List all failed uploads available for retry."""
     try:
         import sys
@@ -1460,8 +1624,7 @@ async def list_failed_uploads(current_user: User = Depends(get_current_user)):
 
 @app.post("/api/uploads/retry/{upload_key}")
 async def retry_failed_upload(
-    upload_key: str,
-    current_user: User = Depends(get_current_user)
+    upload_key: str
 ):
     """Retry a specific failed upload."""
     try:
@@ -1505,8 +1668,7 @@ async def retry_failed_upload(
 
 @app.delete("/api/uploads/failed/{upload_key}")
 async def remove_failed_upload(
-    upload_key: str,
-    current_user: User = Depends(get_current_user)
+    upload_key: str
 ):
     """Remove a failed upload from the retry queue."""
     try:
@@ -1551,8 +1713,7 @@ async def remove_failed_upload(
 
 @app.post("/api/uploads/retry-all")
 async def retry_all_failed_uploads(
-    platforms: Optional[List[str]] = None,
-    current_user: User = Depends(get_current_user)
+    platforms: Optional[List[str]] = None
 ):
     """Retry all failed uploads for specified platforms."""
     try:
@@ -1723,8 +1884,9 @@ async def schedule_replay(
             except ValueError:
                 raise HTTPException(status_code=400, detail="Invalid datetime format")
         else:
-            # Get next available slot
-            next_slots = [get_next_slot(platform, db) for platform in platforms]
+            # Get next available slot using configured spacing
+            config = config_manager.get_config()
+            next_slots = [get_next_slot(platform, db, spacing_hours=config.schedule_spacing_hours) for platform in platforms]
             scheduled_dt = max(next_slots)
         
         # Create scheduled post

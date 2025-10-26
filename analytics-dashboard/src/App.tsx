@@ -1,4 +1,3 @@
-import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -10,6 +9,7 @@ import DashboardLayout from './components/DashboardLayout';
 import UploadsPage from './pages/UploadsPage';
 import AIConfigPage from './pages/AIConfigPage';
 import IntegrationsPage from './pages/IntegrationsPage';
+import DocsPage from './pages/DocsPage';
 import SettingsPage from './pages/SettingsPage';
 
 function AppRoutes() {
@@ -32,6 +32,7 @@ function AppRoutes() {
         <Route path="uploads" element={<UploadsPage />} />
         <Route path="ai-config" element={<AIConfigPage />} />
         <Route path="integrations" element={<IntegrationsPage />} />
+        <Route path="docs" element={<DocsPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
       {/* Redirect unknown routes to dashboard */}

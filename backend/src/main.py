@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 import time
 from .config import settings
 from .database import engine, Base
-from .api import auth, enrichment, oauth_proxy, analytics
+from .api import auth, enrichment, oauth_proxy, analytics, docs
 
 
 @asynccontextmanager
@@ -64,6 +64,7 @@ app.include_router(auth.router)
 app.include_router(enrichment.router)
 app.include_router(oauth_proxy.router)
 app.include_router(analytics.router)
+app.include_router(docs.router)
 
 
 @app.get("/")

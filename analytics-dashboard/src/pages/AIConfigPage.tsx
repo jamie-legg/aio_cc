@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Save, Trash2, Check, Sparkles, Play } from 'lucide-react';
 import { aiConfigApi, AITemplate } from '../services/aiConfigApi';
+import { AIConfigLoading } from '../components/LoadingSpinner';
 
 const DEFAULT_TEMPLATE = `You are a social media expert creating engaging content for gaming videos.
 
@@ -147,11 +148,7 @@ const AIConfigPage: React.FC = () => {
   };
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-white">Loading...</div>
-      </div>
-    );
+    return <AIConfigLoading fullScreen />;
   }
 
   return (

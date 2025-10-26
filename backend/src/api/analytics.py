@@ -226,3 +226,43 @@ def get_platform_stats(
     
     return stats
 
+
+@router.get("/trends")
+def get_analytics_trends(
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db)
+):
+    """Get analytics trends data for the specified number of days."""
+    
+    # Calculate date range
+    end_date = datetime.utcnow()
+    start_date = end_date - timedelta(days=days)
+    
+    # For now, return mock data since we don't have historical tracking
+    # In a real implementation, you would query historical data from the database
+    snapshots = []
+    
+    # Generate mock daily snapshots
+    for i in range(days):
+        snapshot_date = start_date + timedelta(days=i)
+        
+        # Mock data - in reality, you'd query actual historical data
+        snapshots.append({
+            "date": snapshot_date.isoformat(),
+            "total_views": max(0, 1000 + (i * 50) - (i % 7) * 100),  # Mock trending data
+            "total_likes": max(0, 50 + (i * 5) - (i % 5) * 10),
+            "total_comments": max(0, 20 + (i * 2) - (i % 3) * 5),
+            "total_shares": max(0, 5 + (i * 1) - (i % 7) * 2),
+            "total_videos": max(0, 1 + (i * 0.1)),
+            "platforms": {
+                "youtube": max(0, 500 + (i * 25) - (i % 7) * 50),
+                "instagram": max(0, 300 + (i * 15) - (i % 5) * 30),
+                "tiktok": max(0, 200 + (i * 10) - (i % 3) * 20)
+            }
+        })
+    
+    return {
+        "snapshots": snapshots,
+        "days": days,
+        "count": len(snapshots)
+    }

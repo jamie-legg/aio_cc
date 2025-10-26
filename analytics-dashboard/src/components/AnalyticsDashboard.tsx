@@ -11,7 +11,9 @@ import {
 import MetricCard from './MetricCard';
 import PlatformStats from './PlatformStats';
 import TopVideos from './TopVideos';
+import ViewsTrendChart from './ViewsTrendChart';
 import { analyticsApi } from '../services/analyticsApi';
+import { AnalyticsLoading } from './LoadingSpinner';
 
 interface AnalyticsData {
   totalViews: number;
@@ -75,6 +77,7 @@ interface VideoData {
 
 const AnalyticsDashboard: React.FC = () => {
   const [data, setData] = useState<AnalyticsData | null>(null);
+  const [trendData, setTrendData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -128,12 +131,21 @@ const AnalyticsDashboard: React.FC = () => {
   const fetchAnalyticsData = async () => {
     try {
       setLoading(true);
+      
+      // Fetch both current stats and trends
+      const [analyticsData, trendsData] = await Promise.all([
+        analyticsApi.getChannelStats(),
+        analyticsApi.getTrends(30)
+      ]);
+      
+      setTrendData(trendsData.snapshots);
+      
       // Use real API data
-      const analyticsData = await analyticsApi.getChannelStats() as RealApiResponse;
+      const realAnalyticsData = analyticsData as unknown as RealApiResponse;
       
       // Helper function to get platform data
       const getPlatformData = (platform: string) => {
-        return analyticsData.channel_stats.find((p: any) => p.platform === platform) || {
+        return realAnalyticsData.channel_stats.find((p: any) => p.platform === platform) || {
           total_videos: 0,
           total_views: 0,
           total_likes: 0,
@@ -146,11 +158,11 @@ const AnalyticsDashboard: React.FC = () => {
 
       // Map the API data structure to component data structure
       const mappedData: AnalyticsData = {
-        totalViews: analyticsData.total_views_across_platforms,
-        totalVideos: analyticsData.channel_stats.reduce((sum: number, platform) => sum + platform.total_videos, 0),
-        totalLikes: analyticsData.channel_stats.reduce((sum: number, platform) => sum + platform.total_likes, 0),
-        totalComments: analyticsData.channel_stats.reduce((sum: number, platform) => sum + platform.total_comments, 0),
-        totalShares: analyticsData.channel_stats.reduce((sum: number, platform) => sum + platform.total_shares, 0),
+        totalViews: realAnalyticsData.total_views_across_platforms,
+        totalVideos: realAnalyticsData.channel_stats.reduce((sum: number, platform) => sum + platform.total_videos, 0),
+        totalLikes: realAnalyticsData.channel_stats.reduce((sum: number, platform) => sum + platform.total_likes, 0),
+        totalComments: realAnalyticsData.channel_stats.reduce((sum: number, platform) => sum + platform.total_comments, 0),
+        totalShares: realAnalyticsData.channel_stats.reduce((sum: number, platform) => sum + platform.total_shares, 0),
         platforms: {
           youtube: {
             videos: getPlatformData('youtube').total_videos,
@@ -247,14 +259,7 @@ const AnalyticsDashboard: React.FC = () => {
   };
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-center">
-          <div className="rounded-full h-12 w-12 border-b-2 border-terminal-red mx-auto mb-4"></div>
-          <p className="text-terminal-red font-mono">Loading analytics...</p>
-        </div>
-      </div>
-    );
+    return <AnalyticsLoading fullScreen />;
   }
 
   if (error) {
@@ -285,6 +290,11 @@ const AnalyticsDashboard: React.FC = () => {
         <p className="text-lg text-gray-400">
           Real-time performance metrics across all platforms
         </p>
+      </div>
+
+      {/* Views Trend Chart */}
+      <div className="mb-8">
+        <ViewsTrendChart data={trendData} loading={loading} />
       </div>
 
       {/* Main Metrics Grid */}

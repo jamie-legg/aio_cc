@@ -80,25 +80,27 @@ export const missedReplaysApi = {
     scheduledTime?: string,
     platforms?: string[]
   ): Promise<ScheduleReplayResponse> => {
-    const body: any = { video_path: videoPath };
+    // Build query parameters
+    const params = new URLSearchParams();
+    params.append('video_path', videoPath);
     
     if (scheduledTime) {
-      body.scheduled_time = scheduledTime;
+      params.append('scheduled_time', scheduledTime);
     }
     
     if (platforms && platforms.length > 0) {
-      body.platforms = platforms;
+      platforms.forEach(platform => params.append('platforms', platform));
     }
     
-    const response = await fetch(`${API_BASE_URL}/api/schedule-replay`, {
+    const response = await fetch(`${API_BASE_URL}/api/schedule-replay?${params.toString()}`, {
       method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(body)
+      headers: getAuthHeaders()
     });
     
     if (!response.ok) {
       const error = await response.json().catch(() => ({ detail: response.statusText }));
-      throw new Error(error.detail || 'Failed to schedule replay');
+      const errorMessage = error.detail || error.message || response.statusText || 'Failed to schedule replay';
+      throw new Error(errorMessage);
     }
     
     return await response.json();
@@ -113,24 +115,33 @@ export const missedReplaysApi = {
     videoPaths: string[],
     platforms?: string[]
   ): Promise<ScheduleBatchResponse> => {
-    const body: any = { video_paths: videoPaths };
+    // Build query parameters
+    const params = new URLSearchParams();
+    videoPaths.forEach(path => params.append('video_paths', path));
     
     if (platforms && platforms.length > 0) {
-      body.platforms = platforms;
+      platforms.forEach(platform => params.append('platforms', platform));
     }
     
-    const response = await fetch(`${API_BASE_URL}/api/schedule-replays-batch`, {
+    const response = await fetch(`${API_BASE_URL}/api/schedule-replays-batch?${params.toString()}`, {
       method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify(body)
+      headers: getAuthHeaders()
     });
     
     if (!response.ok) {
       const error = await response.json().catch(() => ({ detail: response.statusText }));
-      throw new Error(error.detail || 'Failed to schedule batch');
+      const errorMessage = error.detail || error.message || response.statusText || 'Failed to schedule batch';
+      throw new Error(errorMessage);
     }
     
     return await response.json();
+  },
+
+  /**
+   * Get video URL for missed replay playback
+   */
+  getVideoUrl: (filePath: string): string => {
+    return `${API_BASE_URL}/api/video/serve-missed?file_path=${encodeURIComponent(filePath)}`;
   }
 };
 

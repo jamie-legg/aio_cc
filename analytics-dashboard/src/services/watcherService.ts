@@ -44,7 +44,7 @@ class WatcherService {
   private eventCallbacks: Set<EventCallback> = new Set();
   private errorCallbacks: Set<ErrorCallback> = new Set();
   private statusCallbacks: Set<StatusCallback> = new Set();
-  private reconnectTimer: NodeJS.Timeout | null = null;
+  private reconnectTimer: number | null = null;
 
   constructor(baseUrl: string = API_BASE_URL) {
     this.baseUrl = baseUrl;

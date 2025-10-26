@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Save, Lock, Folder, Clock, Upload } from 'lucide-react';
 import { settingsApi, SettingsData } from '../services/settingsApi';
-import { useAuth } from '../contexts/AuthContext';
+import { SettingsLoading } from '../components/LoadingSpinner';
 
 const SettingsPage: React.FC = () => {
-  const { user } = useAuth();
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -78,7 +77,7 @@ const SettingsPage: React.FC = () => {
   };
 
   if (loading) {
-    return <div className="p-6 text-white">Loading settings...</div>;
+    return <SettingsLoading fullScreen />;
   }
 
   if (!settings) {

@@ -286,6 +286,27 @@ def main():
         dashboard_thread.start()
         threads.append(dashboard_thread)
         
+        # Start auto-sync daemon
+        print(colored("[AUTO-SYNC] Starting metrics auto-sync...", 'CYAN'))
+        autosync_process = subprocess.Popen(
+            ["uv", "run", "python", "scripts/analytics/auto_sync_metrics.py", "--interval", "20"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            cwd=root_dir
+        )
+        processes.append(('AUTO-SYNC', autosync_process))
+
+        # Start output streaming thread
+        autosync_thread = threading.Thread(
+            target=stream_output,
+            args=(autosync_process, "AUTO-SYNC", 'CYAN'),
+            daemon=True
+        )
+        autosync_thread.start()
+        threads.append(autosync_thread)
+        
         # Wait a moment for dashboard to start
         time.sleep(3)
         

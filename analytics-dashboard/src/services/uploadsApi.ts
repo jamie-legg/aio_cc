@@ -31,9 +31,32 @@ export interface FailedUpload {
   retry_count: number;
 }
 
+export interface CompletedUpload {
+  id: number;
+  video_path: string;
+  metadata: {
+    title: string;
+    caption?: string;
+    hashtags?: string;
+  };
+  platforms: string[];
+  platform_urls?: Record<string, {
+    video_id: string;
+    url: string;
+  }>;
+  scheduled_time: string;
+  processed_at: string;
+  status: string;
+}
+
 interface FailedUploadsResponse {
   success: boolean;
   failed_uploads: FailedUpload[];
+  count: number;
+}
+
+interface CompletedUploadsResponse {
+  posts: CompletedUpload[];
   count: number;
 }
 
@@ -112,13 +135,46 @@ export const uploadsApi = {
    * Cancel a scheduled post
    */
   cancelPost: async (postId: number): Promise<void> => {
-    const response = await fetch(`${API_BASE_URL}/api/schedule/post/${postId}/cancel`, {
-      method: 'POST',
+    const response = await fetch(`${API_BASE_URL}/api/schedule/post/${postId}`, {
+      method: 'DELETE',
       headers: getAuthHeaders()
     });
     
     if (!response.ok) {
       throw new Error(`Failed to cancel post: ${response.statusText}`);
+    }
+  },
+
+  /**
+   * Update metadata for a scheduled post
+   */
+  updateMetadata: async (
+    postId: number,
+    metadata: {
+      title?: string;
+      caption?: string;
+      hashtags?: string;
+      platforms?: string[];
+    }
+  ): Promise<void> => {
+    const params = new URLSearchParams();
+    if (metadata.title !== undefined) params.append('title', metadata.title);
+    if (metadata.caption !== undefined) params.append('caption', metadata.caption);
+    if (metadata.hashtags !== undefined) params.append('hashtags', metadata.hashtags);
+    if (metadata.platforms) {
+      metadata.platforms.forEach(p => params.append('platforms', p));
+    }
+    
+    const response = await fetch(
+      `${API_BASE_URL}/api/schedule/post/${postId}/metadata?${params.toString()}`,
+      {
+        method: 'PATCH',
+        headers: getAuthHeaders()
+      }
+    );
+    
+    if (!response.ok) {
+      throw new Error(`Failed to update metadata: ${response.statusText}`);
     }
   },
 
@@ -182,6 +238,29 @@ export const uploadsApi = {
     if (!response.ok) {
       throw new Error(`Failed to remove upload: ${response.statusText}`);
     }
+  },
+
+  /**
+   * Get completed uploads from the last N days
+   */
+  getCompleted: async (days: number = 7): Promise<CompletedUpload[]> => {
+    const response = await fetch(`${API_BASE_URL}/api/schedule/completed?days=${days}`, {
+      headers: getAuthHeaders()
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch completed uploads: ${response.statusText}`);
+    }
+    
+    const data: CompletedUploadsResponse = await response.json();
+    return data.posts || [];
+  },
+
+  /**
+   * Get video URL for playback
+   */
+  getVideoUrl: (postId: number): string => {
+    return `${API_BASE_URL}/api/video/serve/${postId}`;
   }
 };
 

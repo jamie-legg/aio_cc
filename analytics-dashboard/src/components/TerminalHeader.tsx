@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
-import { Terminal, Wifi, WifiOff, RefreshCw, Settings } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Wifi, WifiOff, RefreshCw, Settings } from 'lucide-react';
 
 const TerminalHeader: React.FC = () => {
   const navigate = useNavigate();
-  const location = useLocation();
-  const [isConnected, setIsConnected] = useState(true);
+  const [isConnected] = useState(true);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [refreshStatus, setRefreshStatus] = useState<string>('');
   const [isRefreshing, setIsRefreshing] = useState(false);

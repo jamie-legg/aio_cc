@@ -8,13 +8,7 @@ interface MetricCardProps {
   color: string;
 }
 
-const MetricCard: React.FC<MetricCardProps> = ({ icon, value, label, color }) => {
-  const colorClasses = {
-    'terminal-green': 'text-terminal-green',
-    'terminal-blue': 'text-terminal-blue',
-    'terminal-red': 'text-terminal-red',
-    'terminal-yellow': 'text-terminal-yellow',
-  };
+const MetricCard: React.FC<MetricCardProps> = ({ icon, value, label }) => {
 
   return (
     <motion.div

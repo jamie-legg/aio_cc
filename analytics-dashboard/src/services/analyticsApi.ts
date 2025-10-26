@@ -1,10 +1,5 @@
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
-interface ApiResponse<T> {
-  data: T;
-  error?: string;
-}
-
 interface AnalyticsOverview {
   total_uploads: number;
   successful_uploads: number;
@@ -86,9 +81,9 @@ class AnalyticsApi {
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     try {
       const token = this.getToken();
-      const headers: HeadersInit = {
+      const headers: Record<string, string> = {
         'Content-Type': 'application/json',
-        ...(options.headers || {}),
+        ...(options.headers as Record<string, string> || {}),
       };
 
       if (token) {
@@ -167,6 +162,26 @@ class AnalyticsApi {
 
   async getChannelStats(): Promise<AnalyticsSummary> {
     return this.request<AnalyticsSummary>('/channels/stats');
+  }
+
+  async getTrends(days: number = 30): Promise<{
+    snapshots: Array<{
+      date: string;
+      total_views: number;
+      total_likes: number;
+      total_comments: number;
+      total_shares: number;
+      total_videos: number;
+      platforms: {
+        youtube: number;
+        instagram: number;
+        tiktok: number;
+      };
+    }>;
+    days: number;
+    count: number;
+  }> {
+    return this.request(`/analytics/trends?days=${days}`);
   }
 
   async syncChannels(): Promise<{ message: string; synced_videos: number }> {

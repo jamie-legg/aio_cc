@@ -62,6 +62,21 @@ class AIPromptTemplate:
     updated_at: Optional[datetime] = None
 
 @dataclass
+class DailySnapshot:
+    """Daily aggregated metrics snapshot"""
+    id: Optional[int] = None
+    snapshot_date: str = ""  # YYYY-MM-DD format
+    total_views: int = 0
+    total_likes: int = 0
+    total_comments: int = 0
+    total_shares: int = 0
+    total_videos: int = 0
+    youtube_views: int = 0
+    instagram_views: int = 0
+    tiktok_views: int = 0
+    created_at: Optional[datetime] = None
+
+@dataclass
 class User:
     """User account record"""
     id: Optional[int] = None
@@ -146,6 +161,24 @@ class AnalyticsDatabase:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            
+            # Daily snapshots table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS daily_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_date TEXT UNIQUE NOT NULL,
+                    total_views INTEGER DEFAULT 0,
+                    total_likes INTEGER DEFAULT 0,
+                    total_comments INTEGER DEFAULT 0,
+                    total_shares INTEGER DEFAULT 0,
+                    total_videos INTEGER DEFAULT 0,
+                    youtube_views INTEGER DEFAULT 0,
+                    instagram_views INTEGER DEFAULT 0,
+                    tiktok_views INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_snapshot_date ON daily_snapshots(snapshot_date)")
             
             # Users table
             cursor.execute("""
@@ -596,6 +629,24 @@ class AnalyticsDatabase:
             conn.commit()
             return cursor.rowcount > 0
     
+    def force_post_now(self, post_id: int) -> bool:
+        """Force a scheduled post to post immediately by setting scheduled_time to now"""
+        from datetime import datetime
+        
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Update scheduled time to now for pending posts
+            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            cursor.execute("""
+                UPDATE scheduled_posts 
+                SET scheduled_time = ?, status = 'pending'
+                WHERE id = ? AND status = 'pending'
+            """, (now, post_id))
+            
+            conn.commit()
+            return cursor.rowcount > 0
+    
     def get_scheduled_post(self, post_id: int) -> Optional[ScheduledPost]:
         """Get a specific scheduled post by ID"""
         with sqlite3.connect(self.db_path) as conn:
@@ -638,10 +689,41 @@ class AnalyticsDatabase:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT * FROM scheduled_posts 
-                WHERE scheduled_time BETWEEN ? AND ?
+                WHERE scheduled_time >= ? AND scheduled_time <= ?
                 AND status IN ('pending', 'processing')
                 ORDER BY scheduled_time ASC
-            """, (now.isoformat(), end_time.isoformat()))
+            """, (now.strftime('%Y-%m-%d %H:%M:%S'), end_time.strftime('%Y-%m-%d %H:%M:%S')))
+            rows = cursor.fetchall()
+            
+            posts = []
+            for row in rows:
+                # Parse datetime strings from SQLite
+                scheduled_time = datetime.fromisoformat(row[4]) if row[4] else None
+                created_at = datetime.fromisoformat(row[6]) if row[6] else None
+                processed_at = datetime.fromisoformat(row[7]) if row[7] else None
+                
+                posts.append(ScheduledPost(
+                    id=row[0], video_path=row[1], metadata_json=row[2], platforms=row[3],
+                    scheduled_time=scheduled_time, status=row[5], created_at=created_at,
+                    processed_at=processed_at, error_message=row[8], retry_count=row[9]
+                ))
+            
+            return posts
+    
+    def get_completed_posts(self, days: int = 7) -> List[ScheduledPost]:
+        """Get completed posts from the last N days"""
+        from datetime import timedelta
+        now = datetime.now()
+        start_time = now - timedelta(days=days)
+        
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM scheduled_posts 
+                WHERE processed_at >= ? AND processed_at <= ?
+                AND status = 'completed'
+                ORDER BY processed_at DESC
+            """, (start_time.strftime('%Y-%m-%d %H:%M:%S'), now.strftime('%Y-%m-%d %H:%M:%S')))
             rows = cursor.fetchall()
             
             posts = []
@@ -681,6 +763,25 @@ class AnalyticsDatabase:
                 SET scheduled_time = ?
                 WHERE id = ? AND status = 'pending'
             """, (new_time, post_id))
+            conn.commit()
+            return cursor.rowcount > 0
+    
+    def update_scheduled_post_metadata(self, post_id: int, metadata_json: str, platforms: Optional[str] = None) -> bool:
+        """Update metadata for a scheduled post"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            if platforms is not None:
+                cursor.execute("""
+                    UPDATE scheduled_posts 
+                    SET metadata_json = ?, platforms = ?
+                    WHERE id = ? AND status = 'pending'
+                """, (metadata_json, platforms, post_id))
+            else:
+                cursor.execute("""
+                    UPDATE scheduled_posts 
+                    SET metadata_json = ?
+                    WHERE id = ? AND status = 'pending'
+                """, (metadata_json, post_id))
             conn.commit()
             return cursor.rowcount > 0
     
@@ -908,3 +1009,89 @@ class AnalyticsDatabase:
             cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
             conn.commit()
             return cursor.rowcount > 0
+    
+    def create_daily_snapshot(self) -> bool:
+        """Create a daily snapshot of current metrics"""
+        today = datetime.now().strftime('%Y-%m-%d')
+        
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # Get total videos
+            cursor.execute("SELECT COUNT(*) FROM videos")
+            total_videos = cursor.fetchone()[0]
+            
+            # Get total metrics across all platforms
+            cursor.execute("""
+                SELECT 
+                    SUM(views) as total_views,
+                    SUM(likes) as total_likes,
+                    SUM(comments) as total_comments,
+                    SUM(shares) as total_shares
+                FROM video_metrics vm
+                JOIN videos v ON vm.video_id = v.video_id
+            """)
+            metrics_row = cursor.fetchone()
+            total_views = metrics_row[0] or 0
+            total_likes = metrics_row[1] or 0
+            total_comments = metrics_row[2] or 0
+            total_shares = metrics_row[3] or 0
+            
+            # Get platform breakdown
+            cursor.execute("""
+                SELECT 
+                    v.platform,
+                    SUM(vm.views) as views
+                FROM video_metrics vm
+                JOIN videos v ON vm.video_id = v.video_id
+                GROUP BY v.platform
+            """)
+            platform_data = dict(cursor.fetchall())
+            
+            cursor.execute("""
+                INSERT OR REPLACE INTO daily_snapshots 
+                (snapshot_date, total_views, total_likes, total_comments, total_shares, 
+                 total_videos, youtube_views, instagram_views, tiktok_views)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                today,
+                total_views,
+                total_likes,
+                total_comments,
+                total_shares,
+                total_videos,
+                platform_data.get('youtube', 0),
+                platform_data.get('instagram', 0),
+                platform_data.get('tiktok', 0)
+            ))
+            conn.commit()
+            return True
+
+    def get_daily_snapshots(self, days: int = 30) -> List[DailySnapshot]:
+        """Get daily snapshots for the last N days"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM daily_snapshots 
+                ORDER BY snapshot_date DESC 
+                LIMIT ?
+            """, (days,))
+            rows = cursor.fetchall()
+            
+            snapshots = []
+            for row in rows:
+                snapshots.append(DailySnapshot(
+                    id=row[0],
+                    snapshot_date=row[1],
+                    total_views=row[2],
+                    total_likes=row[3],
+                    total_comments=row[4],
+                    total_shares=row[5],
+                    total_videos=row[6],
+                    youtube_views=row[7],
+                    instagram_views=row[8],
+                    tiktok_views=row[9],
+                    created_at=datetime.fromisoformat(row[10]) if row[10] else None
+                ))
+            
+            return list(reversed(snapshots))  # Return oldest to newest for charts

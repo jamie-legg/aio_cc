@@ -11,33 +11,35 @@ from analytics.database import AnalyticsDatabase, ScheduledPost
 logger = logging.getLogger(__name__)
 
 
-def get_next_slot(platform: str, db: AnalyticsDatabase, base_time: Optional[datetime] = None) -> datetime:
+def get_next_slot(platform: str, db: AnalyticsDatabase, base_time: Optional[datetime] = None, 
+                  spacing_hours: int = 1) -> datetime:
     """
-    Get the next available hour slot for a platform.
+    Get the next available slot for a platform.
     
     Args:
         platform: Platform name (youtube, instagram, tiktok)
         db: Database instance
-        base_time: Starting time (defaults to next hour from now)
+        base_time: Starting time (defaults to next slot from now)
+        spacing_hours: Hours between posts on same platform
     
     Returns:
-        Next available datetime slot on the hour
+        Next available datetime slot
     """
     if base_time is None:
         now = datetime.now()
-        next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+        next_slot = (now + timedelta(hours=spacing_hours)).replace(minute=0, second=0, microsecond=0)
     else:
-        next_hour = base_time.replace(minute=0, second=0, microsecond=0)
+        next_slot = base_time.replace(minute=0, second=0, microsecond=0)
     
     # Check if slot is taken, keep incrementing until we find a free slot
-    while db.has_post_at_time(platform, next_hour):
-        next_hour += timedelta(hours=1)
+    while db.has_post_at_time(platform, next_slot):
+        next_slot += timedelta(hours=spacing_hours)
     
-    return next_hour
+    return next_slot
 
 
 def schedule_video(video_path: str, metadata: Dict[str, Any], platforms: List[str], 
-                  db_path: str = "analytics.db") -> datetime:
+                  db_path: str = "analytics.db", spacing_hours: int = 1) -> datetime:
     """
     Schedule a video for posting.
     
@@ -46,6 +48,7 @@ def schedule_video(video_path: str, metadata: Dict[str, Any], platforms: List[st
         metadata: Dictionary with title, description, hashtags
         platforms: List of platforms to post to
         db_path: Path to the analytics database
+        spacing_hours: Hours between posts on same platform
     
     Returns:
         Scheduled datetime for the post
@@ -53,7 +56,7 @@ def schedule_video(video_path: str, metadata: Dict[str, Any], platforms: List[st
     db = AnalyticsDatabase(db_path)
     
     # Get the earliest available slot across all platforms
-    next_slots = [get_next_slot(platform, db) for platform in platforms]
+    next_slots = [get_next_slot(platform, db, spacing_hours=spacing_hours) for platform in platforms]
     scheduled_time = max(next_slots)  # Use the latest slot to avoid conflicts
     
     # Create scheduled post record

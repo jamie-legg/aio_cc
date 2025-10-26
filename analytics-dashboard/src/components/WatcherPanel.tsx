@@ -9,7 +9,6 @@ import {
   Activity,
   Folder,
   Video,
-  CheckCircle,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { watcherService, WatcherEvent, OBSStatus } from '../services/watcherService';

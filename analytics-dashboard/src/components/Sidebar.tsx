@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { BarChart3, Upload, Sparkles, Webhook, Settings, LogOut, User } from 'lucide-react';
+import { BarChart3, Upload, Sparkles, Webhook, Settings, LogOut, User, BookOpen } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 
 const Sidebar: React.FC = () => {
@@ -32,6 +32,11 @@ const Sidebar: React.FC = () => {
       path: '/dashboard/integrations',
       icon: <Webhook size={20} />,
       label: 'Integrations'
+    },
+    {
+      path: '/dashboard/docs',
+      icon: <BookOpen size={20} />,
+      label: 'Documentation'
     },
     {
       path: '/dashboard/settings',

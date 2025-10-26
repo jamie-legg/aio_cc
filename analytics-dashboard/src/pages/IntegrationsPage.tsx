@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Edit, TestTube, Webhook, Save, X } from 'lucide-react';
 import { integrationsApi, DiscordWebhook, DiscordWebhookCreateRequest } from '../services/integrationsApi';
+import { IntegrationsLoading } from '../components/LoadingSpinner';
 
 const IntegrationsPage: React.FC = () => {
   const [webhooks, setWebhooks] = useState<DiscordWebhook[]>([]);
@@ -118,7 +119,7 @@ const IntegrationsPage: React.FC = () => {
   };
 
   if (loading) {
-    return <div className="p-6 text-white">Loading integrations...</div>;
+    return <IntegrationsLoading fullScreen />;
   }
 
   return (
